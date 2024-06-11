@@ -29,6 +29,8 @@
 
 #include "fault.h"
 
+#ifdef CONFIG_MMU
+
 bool copy_from_kernel_nofault_allowed(const void *unsafe_src, size_t size)
 {
 	unsigned long addr = (unsigned long)unsafe_src;
@@ -36,7 +38,6 @@ bool copy_from_kernel_nofault_allowed(const void *unsafe_src, size_t size)
 	return addr >= TASK_SIZE && ULONG_MAX - addr >= size;
 }
 
-#ifdef CONFIG_MMU
 
 #ifdef CONFIG_IRQ_PIPELINE
 /*
