@@ -1022,7 +1022,6 @@ struct file {
 #endif
 	/* needed for tty driver, and maybe others */
 	void			*private_data;
-	void			*oob_data;
 
 #ifdef CONFIG_EPOLL
 	/* Used by fs/eventpoll.c to link all the hooks to this file */
@@ -1031,6 +1030,9 @@ struct file {
 	struct address_space	*f_mapping;
 	errseq_t		f_wb_err;
 	errseq_t		f_sb_err; /* for syncfs */
+#ifdef CONFIG_DOVETAIL
+	void			*f_oob_ctx;
+#endif
 } __randomize_layout
   __attribute__((aligned(4)));	/* lest something weird decides that 2 is OK */
 
