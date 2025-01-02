@@ -540,7 +540,7 @@ struct sock {
 	void                    (*sk_destruct)(struct sock *sk);
 	struct sock_reuseport __rcu	*sk_reuseport_cb;
 #ifdef CONFIG_NET_OOB
-	void			*oob_data;
+	void			*sk_oob_ctx;
 #endif
 #ifdef CONFIG_BPF_SYSCALL
 	struct bpf_local_storage __rcu	*sk_bpf_storage;
@@ -1886,7 +1886,7 @@ void sock_pfree(struct sk_buff *skb);
 
 static inline bool sock_oob_capable(struct socket *sock)
 {
-	return sock && sock->sk && sock->sk->oob_data;
+	return sock && sock->sk && sock->sk->sk_oob_ctx;
 }
 
 int sock_oob_bind(struct sock *sk,
@@ -1897,7 +1897,7 @@ int sock_oob_shutdown(struct sock *sk, int how);
 static inline void sock_oob_destruct(struct sock *sk)
 {
 	void sock_oob_destroy(struct sock *sk);
-	if (sk->oob_data)
+	if (sk->sk_oob_ctx)
 		sock_oob_destroy(sk);
 }
 
