@@ -81,7 +81,12 @@ struct rts5453h {
 	struct typec_partner	*partner;
 	struct typec_partner_desc desc;
 	bool pd_int_disabled;
+	struct list_head list;
+	struct delayed_work irq_work;
 };
+
+static LIST_HEAD(rts_list);
+static DEFINE_MUTEX(rts_lock);
 
 #define RTS_MAX_LEN	64
 
@@ -422,6 +427,30 @@ static irqreturn_t rts5453h_irq_handle(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static irqreturn_t rts5453h_irq_rts_handle(int irq, void *data)
+{
+	struct list_head *item, *tmp;
+	struct i2c_client *client, *cl;
+	struct rts5453h *rts = data, *rt;
+
+	/* handle own rts event */
+	rts5453h_irq_handle(irq, rts);
+
+	/* polling other rts event which without irq */
+	client = to_i2c_client(rts->dev);
+	mutex_lock(&rts_lock);
+	list_for_each_safe(item, tmp, &rts_list) {
+		rt = list_entry(item, struct rts5453h, list);
+		cl = to_i2c_client(rt->dev);
+
+		if (client->adapter == cl->adapter && rts != rt)
+			rts5453h_irq_handle(irq, rt);
+	}
+	mutex_unlock(&rts_lock);
+
+	return IRQ_HANDLED;
+}
+
 static int rts5453h_init_ports(struct rts5453h *typec)
 {
 	struct device *dev = typec->dev;
@@ -513,6 +542,68 @@ static ssize_t disable_pd_interrupt_store(struct device *dev,
 
 DEVICE_ATTR_RW(disable_pd_interrupt);
 
+static bool is_rts_irq_shared_deivces_all_bound(struct rts5453h *rts)
+{
+	struct i2c_client *client;
+	struct fwnode_handle *child, *gchild;
+	int all_bound = 1, is_rts_node = 0;
+
+	device_for_each_child_node(rts->dev->parent, child) {
+		is_rts_node = 0;
+		fwnode_for_each_child_node(child, gchild) {
+			if (fwnode_property_present(gchild, "power-role")
+			&& fwnode_property_present(gchild, "data-role")
+			&& fwnode_property_present(gchild, "try-power-role")) {
+				is_rts_node = 1;
+				break;
+			}
+		}
+		if (!is_rts_node)
+			continue;
+
+		client = i2c_find_device_by_fwnode(child);
+		if (!client || !device_is_bound(&client->dev)) {
+			all_bound = 0;
+			break;
+		}
+	}
+
+	return all_bound;
+}
+
+static void rts_request_irq_work_fn(struct work_struct *work)
+{
+	struct rts5453h *rts = container_of(work, struct rts5453h, irq_work.work);
+	struct i2c_client *client = to_i2c_client(rts->dev);
+	int ret;
+
+	if (client->irq <= 0)
+		return;
+
+	if (!is_rts_irq_shared_deivces_all_bound(rts)) {
+		schedule_delayed_work(&rts->irq_work, msecs_to_jiffies(5));
+		dev_dbg(rts->dev, "irq work scheduled\n");
+		return;
+	}
+
+	irq_set_status_flags(client->irq, IRQ_DISABLE_UNLAZY);
+	ret = request_threaded_irq(client->irq, NULL,
+				   rts5453h_irq_rts_handle,
+				   IRQF_TRIGGER_LOW | IRQF_ONESHOT,
+				   dev_name(&client->dev), rts);
+	if (ret == -EBUSY) {
+		/* irq already request in other rts, do nothing here */
+		dev_info(&client->dev, "irq %d already registerd", client->irq);
+	} else if (ret < 0) {
+		dev_err(&client->dev, "request irq %d failed %d", client->irq, ret);
+	} else {
+		/* succeed! remove from polling list and handle separately. */
+		mutex_lock(&rts_lock);
+		list_del_init(&rts->list);
+		mutex_unlock(&rts_lock);
+	}
+}
+
 static int rts5453h_probe(struct i2c_client *client)
 {
 	struct rts5453h *rts;
@@ -558,18 +649,15 @@ static int rts5453h_probe(struct i2c_client *client)
 	* TBD Check do anything about in init schedule like enable interrupt
 	* or check the firmware running status before request irq
 	*/
-	if (client->irq) {
-		irq_set_status_flags(client->irq, IRQ_DISABLE_UNLAZY);
-		ret = devm_request_threaded_irq(&client->dev,
-						client->irq, NULL,
-						rts5453h_irq_handle,
-						IRQF_TRIGGER_LOW | IRQF_SHARED | IRQF_ONESHOT,
-						dev_name(&client->dev), rts);
 
-		if (ret < 0) {
-			dev_err(&client->dev, "request irq %d failed %d", client->irq, ret);
-		}
-	}
+	INIT_LIST_HEAD(&rts->list);
+	mutex_lock(&rts_lock);
+	list_add(&rts->list, &rts_list);
+	mutex_unlock(&rts_lock);
+
+	INIT_DELAYED_WORK(&rts->irq_work, rts_request_irq_work_fn);
+	if (client->irq)
+		schedule_delayed_work(&rts->irq_work, msecs_to_jiffies(5));
 
 	ret = device_create_file(&client->dev, &dev_attr_disable_pd_interrupt);
 	if (ret < 0)
@@ -599,6 +687,13 @@ static void rts5453h_remove(struct i2c_client *client)
 	if (rts->port) {
 		typec_unregister_port(rts->port);
 	}
+
+	if (client->irq > 0)
+		free_irq(client->irq, rts);
+
+	mutex_lock(&rts_lock);
+	list_del(&rts->list);
+	mutex_unlock(&rts_lock);
 }
 
 static const struct of_device_id rts5453h_of_match[] = {
