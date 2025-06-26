@@ -159,7 +159,10 @@ typedef struct {
 
 #define SE_RTC_REG_READ		_IOWR('p', 0x20, reg_data)
 #define SE_RTC_REG_WRITE	_IOW('p',  0x21, reg_data)
+#define SE_RTC_SET_WAKE_TIME	_IOW('p',  0xf1, u8)
 
+#define RX8900_MAX_TEST_WAKE_TIME	(100)
+static u8 g_test_wake_time;
 //----------------------------------------------------------------------SE_RTC_REG_READ
 // rx8900_read_reg()
 // reads a rx8900 register (see Register defines)
@@ -767,6 +770,18 @@ static int rx8900_ioctl(struct device *dev, unsigned int cmd, unsigned long arg)
 			//mutex_unlock(lock);
 			break;
 
+		case SE_RTC_SET_WAKE_TIME:
+			if (copy_from_user(&g_test_wake_time, argp, sizeof(g_test_wake_time)))
+				return -EFAULT;
+			if (g_test_wake_time > RX8900_MAX_TEST_WAKE_TIME) {
+				g_test_wake_time = 0;
+				dev_err(&client->dev, "invalid wake time %d\n", g_test_wake_time);
+				return -EFAULT;
+			}
+			dev_info(&client->dev, "set test wake time=%d\n", g_test_wake_time);
+			ret = 0;
+			break;
+
 		default:
 			return -ENOIOCTLCMD;
 	}
@@ -894,6 +909,11 @@ static void rx8900_shutdown(struct i2c_client *client)
 		ctrlreg &= ~RX8900_BTC_CTRL_UIE;
 		rx8900_write_reg(client, RX8900_BTC_CTRL, ctrlreg);
 		return;
+	}
+
+	if (g_test_wake_time && cur_secs >= alarm_secs) {
+		/* Just for test purpose */
+		alarm_secs = cur_secs + g_test_wake_time;
 	}
 
 	/* If the current time is less than the alarm time, we can set the timer */
