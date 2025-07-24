@@ -4142,6 +4142,32 @@ static void i40e_irq_affinity_notify(struct irq_affinity_notify *notify,
  **/
 static void i40e_irq_affinity_release(struct kref *ref) {}
 
+static bool is_little_core(int cpu)
+{
+	#define LITTLE_CORE_CAPACITY 500
+	/* Check if the CPU is a little CPU based on its capacity.
+	 * This is a simplified check, assuming that CPUs with
+	 * capacity less than LITTLE_CORE_CAPACITY are considered little.
+	 */
+	unsigned long capacity = topology_get_cpu_scale(cpu);
+
+	return capacity < LITTLE_CORE_CAPACITY;
+}
+
+static cpumask_t get_non_little_cpu_mask(void)
+{
+	cpumask_t mask;
+	int cpu;
+
+	/* Create a mask of all non-little CPUs */
+	cpumask_clear(&mask);
+	for_each_online_cpu(cpu) {
+		if (!is_little_core(cpu))
+			cpumask_set_cpu(cpu, &mask);
+	}
+	return mask;
+}
+
 /**
  * i40e_vsi_request_irq_msix - Initialize MSI-X interrupts
  * @vsi: the VSI being configured
@@ -4159,6 +4185,7 @@ static int i40e_vsi_request_irq_msix(struct i40e_vsi *vsi, char *basename)
 	int vector, err;
 	int irq_num;
 	int cpu;
+	cpumask_t mask = get_non_little_cpu_mask();
 
 	for (vector = 0; vector < q_vectors; vector++) {
 		struct i40e_q_vector *q_vector = vsi->q_vectors[vector];
@@ -4189,7 +4216,7 @@ static int i40e_vsi_request_irq_msix(struct i40e_vsi *vsi, char *basename)
 				 "MSIX request_irq failed, error: %d\n", err);
 			goto free_queue_irqs;
 		}
-
+		irq_set_affinity_and_hint(irq_num, &mask);
 		/* register for affinity change notifications */
 		q_vector->irq_num = irq_num;
 		q_vector->affinity_notify.notify = i40e_irq_affinity_notify;
@@ -4635,6 +4662,7 @@ static int i40e_vsi_request_irq(struct i40e_vsi *vsi, char *basename)
 {
 	struct i40e_pf *pf = vsi->back;
 	int err;
+	cpumask_t mask = get_non_little_cpu_mask();
 
 	if (pf->flags & I40E_FLAG_MSIX_ENABLED)
 		err = i40e_vsi_request_irq_msix(vsi, basename);
@@ -4647,7 +4675,7 @@ static int i40e_vsi_request_irq(struct i40e_vsi *vsi, char *basename)
 
 	if (err)
 		dev_info(&pf->pdev->dev, "request_irq failed, Error %d\n", err);
-
+	irq_set_affinity_and_hint(pf->pdev->irq, &mask);
 	return err;
 }
 
@@ -12188,6 +12216,7 @@ err_unwind:
 static int i40e_setup_misc_vector_for_recovery_mode(struct i40e_pf *pf)
 {
 	int err;
+	cpumask_t mask = get_non_little_cpu_mask();
 
 	if (pf->flags & I40E_FLAG_MSIX_ENABLED) {
 		err = i40e_setup_misc_vector(pf);
@@ -12210,6 +12239,7 @@ static int i40e_setup_misc_vector_for_recovery_mode(struct i40e_pf *pf)
 				 err);
 			return err;
 		}
+		irq_set_affinity_and_hint(pf->pdev->irq, &mask);
 		i40e_enable_misc_int_causes(pf);
 		i40e_irq_dynamic_enable_icr0(pf);
 	}
@@ -12229,6 +12259,7 @@ static int i40e_setup_misc_vector(struct i40e_pf *pf)
 {
 	struct i40e_hw *hw = &pf->hw;
 	int err = 0;
+	cpumask_t mask = get_non_little_cpu_mask();
 
 	/* Only request the IRQ once, the first time through. */
 	if (!test_and_set_bit(__I40E_MISC_IRQ_REQUESTED, pf->state)) {
@@ -12241,6 +12272,8 @@ static int i40e_setup_misc_vector(struct i40e_pf *pf)
 				 pf->int_name, err);
 			return -EFAULT;
 		}
+		irq_set_affinity_and_hint(pf->msix_entries[0].vector, &mask);
+
 	}
 
 	i40e_enable_misc_int_causes(pf);
