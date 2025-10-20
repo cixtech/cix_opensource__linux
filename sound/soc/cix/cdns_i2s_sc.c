@@ -137,6 +137,10 @@ static const char *cdns_i2s_sc_clk_pll_names[AUDIO_CLK_NUM] = {
 	[AUDIO_CLK2] = "audio_clk2",
 };
 
+enum {
+	I2S_SC_AIF = 1 ,
+};
+
 struct cdns_i2s_sc_devtype_data {
 	u32 fifo_depth;
 	u32 rx_fifo_aempty_threshold;
@@ -872,6 +876,8 @@ static const struct snd_soc_dai_ops cdns_i2s_sc_dai_ops = {
 };
 
 static struct snd_soc_dai_driver cdns_i2s_sc_dai = {
+	.name = "i2s-sc-aif",
+	.id = I2S_SC_AIF,
 	.playback = {
 		.stream_name = "I2S-SC-Playback",
 		.channels_min = 1,
