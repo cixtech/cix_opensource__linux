@@ -675,6 +675,7 @@ static struct dai_link_info sky1_link_info[] = {
 		.jack_pin[JACK_HP].mask = SND_JACK_HEADSET,
 		.jack_det_mask = JACK_MASK_HP,
 		.mclk_fs = 512,
+		.mclk_idx = 0,
 	}, /* "dailink_i2s_sc0_alc5682" */
 	{
 	}, /* "dailink_i2s_mc3_alc1019" */
@@ -878,11 +879,18 @@ int cix_card_parse_acpi(struct cix_asoc_card *priv)
 	struct snd_soc_dai_link *link;
 	struct dai_link_info *link_info;
 	struct device *dev = card->dev;
-	int ret, i, num_links = 0;
+	int ret, i, j, num_links = 0;
 
 	ret = cix_gpio_init(priv);
 	if (ret)
 		return ret;
+
+	priv->cru_regmap = device_syscon_regmap_lookup_by_property(dev, "cru-ctrl");
+	if (PTR_ERR(priv->cru_regmap) == -ENODEV) {
+		priv->cru_regmap = NULL;
+	} else if (IS_ERR(priv->cru_regmap)) {
+		return PTR_ERR(priv->cru_regmap);
+	}
 
 	for (i = 0; i < (LK_MAX - SKY1_AUDSS_DP_AUDIO_COUNT); i++)
 		if (!cix_acpi_i2s_audio_check_present(sky1_dailink[i].id))
@@ -908,6 +916,8 @@ int cix_card_parse_acpi(struct cix_asoc_card *priv)
 	card->name = "cix,sky1";
 	card->num_links = num_links;
 	card->dai_link = link;
+	card->suspend_post = cix_card_suspend_post;
+	card->resume_pre = cix_card_resume_pre;
 	priv->link_info = link_info;
 
 	/* on-board audio */
@@ -917,6 +927,28 @@ int cix_card_parse_acpi(struct cix_asoc_card *priv)
 
 		memcpy(link, &sky1_dailink[i], sizeof(struct snd_soc_dai_link));
 		memcpy(link_info, &sky1_link_info[i], sizeof(struct dai_link_info));
+
+		if (link_info->mclk_fs) {
+			char mclk[16];
+
+			snprintf(mclk, 16, "mclk%d", link_info->mclk_idx);
+			dev_info(dev, "mclk = %s\n", mclk);
+
+			link_info->clk_mclk = devm_clk_get(dev, mclk);
+			if (IS_ERR(link_info->clk_mclk)) {
+				dev_err(dev, "failed to get clk_mclk clock\n");
+				return PTR_ERR(link_info->clk_mclk);
+			}
+
+			for (j = 0; j < AUDIO_CLK_NUM; j++) {
+				link_info->clks[j] = devm_clk_get(dev, mclk_pll_names[j]);
+				if (IS_ERR(link_info->clks[j])) {
+					dev_err(dev, "failed to get clock %s\n", mclk_pll_names[j]);
+					return PTR_ERR(link_info->clks[j]);
+				}
+			}
+		}
+
 		dev_info(dev, "audio: cpu[%s][%s] codec[%s][%s] platform[%s]\n",
 			 link->cpus->name, link->cpus->dai_name,
 			 link->codecs->name, link->codecs->dai_name,
