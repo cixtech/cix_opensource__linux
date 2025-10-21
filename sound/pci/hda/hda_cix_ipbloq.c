@@ -715,7 +715,7 @@ static int cix_ipbloq_hda_probe(struct platform_device *pdev)
 		goto out_free;
 	}
 
-	hda->pdb_gpiod = devm_gpiod_get_optional(&pdev->dev, "pdb", GPIOD_OUT_HIGH);
+	hda->pdb_gpiod = devm_gpiod_get_optional(&pdev->dev, "pdb", GPIOD_OUT_HIGH | GPIOD_FLAGS_BIT_NONEXCLUSIVE);
 	if (IS_ERR(hda->pdb_gpiod)) {
 		err = PTR_ERR(hda->pdb_gpiod);
 		dev_err(&pdev->dev, "failed to get pdb gpio, err: %d\n", err);

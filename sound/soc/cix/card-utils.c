@@ -309,7 +309,7 @@ static int cix_gpio_init(struct cix_asoc_card *priv)
 	struct device *dev = card->dev;
 	int ret;
 
-	priv->pdb0_gpiod = devm_gpiod_get_optional(dev, "pdb0", GPIOD_OUT_HIGH);
+	priv->pdb0_gpiod = devm_gpiod_get_optional(dev, "pdb0", GPIOD_OUT_HIGH | GPIOD_FLAGS_BIT_NONEXCLUSIVE);
 	if (IS_ERR(priv->pdb0_gpiod)) {
 		ret = PTR_ERR(priv->pdb0_gpiod);
 		dev_err(dev, "failed to pdb gpio, ret: %d\n", ret);
