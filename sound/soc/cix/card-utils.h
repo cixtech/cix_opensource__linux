@@ -57,14 +57,6 @@ struct cix_asoc_card {
 	struct gpio_desc *pdb1_gpiod;
 	struct gpio_desc *pdb2_gpiod;
 	struct gpio_desc *pdb3_gpiod;
-	struct gpio_desc *beep_gpiod; /* for beep sound */
-
-	/* codec, now support for alc5682 */
-	struct gpio_desc *codec_gpiod; /* load switch for codec */
-	struct gpio_desc *i2sint_gpiod; /* codec int */
-	struct gpio_desc *hpmicdet_gpiod; /* mic detect */
-
-	struct gpio_desc *mclk_gpiod;
 };
 
 int cix_card_parse_of(struct cix_asoc_card *priv);

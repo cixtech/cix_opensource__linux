@@ -337,41 +337,6 @@ static int cix_gpio_init(struct cix_asoc_card *priv)
 		return ret;
 	}
 
-	priv->beep_gpiod = devm_gpiod_get_optional(dev, "beep", GPIOD_OUT_HIGH);
-	if (IS_ERR(priv->beep_gpiod)) {
-		ret = PTR_ERR(priv->beep_gpiod);
-		dev_err(dev, "failed to beep gpio, ret: %d\n", ret);
-		return ret;
-	}
-
-	priv->codec_gpiod = devm_gpiod_get_optional(dev, "codec", GPIOD_OUT_HIGH);
-	if (IS_ERR(priv->codec_gpiod)) {
-		ret = PTR_ERR(priv->codec_gpiod);
-		dev_err(dev, "failed to codec gpio, ret: %d\n", ret);
-		return ret;
-	}
-
-	priv->i2sint_gpiod = devm_gpiod_get_optional(dev, "i2sint", GPIOD_IN);
-	if (IS_ERR(priv->i2sint_gpiod)) {
-		ret = PTR_ERR(priv->i2sint_gpiod);
-		dev_err(dev, "failed to i2s int gpio, ret: %d\n", ret);
-		return ret;
-	}
-
-	priv->mclk_gpiod = devm_gpiod_get_optional(dev, "mclkext", GPIOD_OUT_HIGH);
-	if (IS_ERR(priv->mclk_gpiod)) {
-		ret = PTR_ERR(priv->mclk_gpiod);
-		dev_err(dev, "failed to get mclk gpio, ret: %d\n", ret);
-		return ret;
-	}
-
-	priv->hpmicdet_gpiod = devm_gpiod_get_optional(dev, "hpmicdet", GPIOD_IN);
-	if (IS_ERR(priv->hpmicdet_gpiod)) {
-		ret = PTR_ERR(priv->hpmicdet_gpiod);
-		dev_err(dev, "failed to get hp mic detect gpio, ret: %d\n", ret);
-		return ret;
-	}
-
 	return 0;
 }
 
