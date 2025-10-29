@@ -1551,7 +1551,7 @@ static int cdns_i2c_probe(struct platform_device *pdev)
 	acpi_speed = i2c_acpi_find_bus_speed(&pdev->dev);
 	if (acpi_speed && acpi_speed < id->i2c_clk)
 		id->i2c_clk = acpi_speed;
-	if (id->i2c_clk > I2C_MAX_FAST_MODE_FREQ)
+	if (id->i2c_clk > I2C_MAX_FAST_MODE_PLUS_FREQ)
 		id->i2c_clk = I2C_MAX_STANDARD_MODE_FREQ;
 
 #if IS_ENABLED(CONFIG_I2C_SLAVE)
