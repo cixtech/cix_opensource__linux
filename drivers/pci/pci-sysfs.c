@@ -1520,10 +1520,25 @@ static const struct attribute_group pci_dev_resource_resize_group = {
 
 int __must_check pci_create_sysfs_dev_files(struct pci_dev *pdev)
 {
+	unsigned long flags;
+	int ret = 0;
+
 	if (!sysfs_initialized)
 		return -EACCES;
 
-	return pci_create_resource_files(pdev);
+	spin_lock_irqsave(&pdev->sysfs_lock, flags);
+	if(pdev->sysfs_files_created){
+		spin_unlock_irqrestore(&pdev->sysfs_lock, flags);
+		return 0;
+	}
+	pdev->sysfs_files_created = 1;
+	spin_unlock_irqrestore(&pdev->sysfs_lock, flags);
+
+	ret = pci_create_resource_files(pdev);
+	if (ret)
+		pdev->sysfs_files_created = 0;
+
+	return ret;
 }
 
 /**
@@ -1534,8 +1549,14 @@ int __must_check pci_create_sysfs_dev_files(struct pci_dev *pdev)
  */
 void pci_remove_sysfs_dev_files(struct pci_dev *pdev)
 {
+	unsigned long flags;
+
 	if (!sysfs_initialized)
 		return;
+
+	spin_lock_irqsave(&pdev->sysfs_lock, flags);
+	pdev->sysfs_files_created = 0;
+	spin_unlock_irqrestore(&pdev->sysfs_lock, flags);
 
 	pci_remove_resource_files(pdev);
 }

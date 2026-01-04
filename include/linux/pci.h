@@ -529,6 +529,9 @@ struct pci_dev {
 
 	/* These methods index pci_reset_fn_methods[] */
 	u8 reset_methods[PCI_NUM_RESET_METHODS]; /* In priority order */
+
+	spinlock_t sysfs_lock; /* Protects sysfs_files_created */
+	unsigned int sysfs_files_created : 1; /* sysfs files created */
 };
 
 static inline struct pci_dev *pci_physfn(struct pci_dev *dev)

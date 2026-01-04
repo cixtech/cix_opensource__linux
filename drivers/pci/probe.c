@@ -1861,6 +1861,9 @@ int pci_setup_device(struct pci_dev *dev)
 
 	hdr_type = pci_hdr_type(dev);
 
+	spin_lock_init(&dev->sysfs_lock);
+	dev->sysfs_files_created = 0;
+
 	dev->sysdata = dev->bus->sysdata;
 	dev->dev.parent = dev->bus->bridge;
 	dev->dev.bus = &pci_bus_type;
