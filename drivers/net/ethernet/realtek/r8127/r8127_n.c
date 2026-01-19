@@ -14489,6 +14489,7 @@ static void rtl8127_free_irq(struct rtl8127_private *tp)
 
                 if (irq->requested) {
                         irq->requested = 0;
+			irq_set_affinity_hint(irq->vector, NULL);
 #if defined(RTL_USE_NEW_INTR_API)
                         pci_free_irq(tp->pci_dev, i, r8127napi);
 #else
