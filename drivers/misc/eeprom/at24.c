@@ -406,8 +406,10 @@ static ssize_t at24_regmap_write(struct at24_data *at24, const char *buf,
 		ret = regmap_bulk_write(regmap, offset, buf, count);
 		dev_dbg(regmap_get_device(regmap), "write %zu@%d --> %d (%ld)\n",
 			count, offset, ret, jiffies);
-		if (!ret)
+		if (!ret) {
+			usleep_range(6000, 7500);
 			return count;
+		}
 
 		usleep_range(1000, 1500);
 	} while (time_before(write_time, timeout));
