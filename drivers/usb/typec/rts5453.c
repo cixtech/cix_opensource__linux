@@ -282,6 +282,7 @@ static int rts5453h_typec_port_update(struct rts5453h *typec)
 			dev_info(typec->dev, "typec port(%d): register partner error \n", typec->id);
 		}
 	}
+	typec->port->orientation = orientation;
 	return ret;
 }
 
@@ -381,6 +382,7 @@ static int rts5453h_typec_parse_port_props(struct typec_capability *cap,
 		return ret;
 	cap->prefer_role = ret;
 	cap->fwnode = fwnode;
+	cap->orientation_aware = 1;
 	return 0;
 }
 
