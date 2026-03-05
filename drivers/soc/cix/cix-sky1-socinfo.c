@@ -111,11 +111,15 @@ static const char *roadmap_code_types[] = {
 #define MODEL8180			0x8180
 #define MODEL8160			0x8160
 #define MODEL6180			0x6180
+#define MODEL6188			0x6188
+#define MODEL6187			0x6187
 /* Model code types */
 static const char *model_code_types[] = {
 	"8180",
 	"8160",
 	"6180",
+	"6188",
+	"6187",
 	"Unknown",
 };
 
@@ -494,8 +498,14 @@ static int cix_opn_info_parse(const uint64_t opn, struct cix_opn_info *opn_info)
 	case MODEL6180:
 		model_code_numer = 2;
 		break;
-	default:
+	case MODEL6188:
 		model_code_numer = 3;
+		break;
+	case MODEL6187:
+		model_code_numer = 4;
+		break;
+	default:
+		model_code_numer = 5;
 		break;
 	}
 
