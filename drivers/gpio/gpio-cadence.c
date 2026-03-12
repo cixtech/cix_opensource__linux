@@ -461,7 +461,7 @@ static int __maybe_unused cdns_gpio_resume(struct device *dev)
 
 
 static const struct dev_pm_ops cdns_gpio_dev_ops = {
-	LATE_SYSTEM_SLEEP_PM_OPS(cdns_gpio_suspend, cdns_gpio_resume)
+	NOIRQ_SYSTEM_SLEEP_PM_OPS(cdns_gpio_suspend, cdns_gpio_resume)
 };
 
 static const struct of_device_id cdns_of_ids[] = {
