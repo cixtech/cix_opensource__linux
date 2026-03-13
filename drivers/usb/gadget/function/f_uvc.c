@@ -557,8 +557,18 @@ uvc_copy_descriptors(struct uvc_device *uvc, enum usb_device_speed speed)
 	/* Count descriptors and compute their size. */
 	control_size = 0;
 	streaming_size = 0;
+	n_desc = 3; /* uvc_iad + uvc_control_intf + uvc_streaming_intf_alt0 */
 	bytes = uvc_iad.bLength + uvc_control_intf.bLength
 	      + uvc_streaming_intf_alt0.bLength;
+
+	if (uvc->enable_interrupt_ep) {
+		bytes += uvc_interrupt_ep.bLength + uvc_interrupt_cs_ep.bLength;
+		n_desc += 2;
+		if (speed == USB_SPEED_SUPER || speed == USB_SPEED_SUPER_PLUS) {
+			bytes += uvc_ss_interrupt_comp.bLength;
+			n_desc += 1;
+		}
+	}
 
 	for (src = (const struct usb_descriptor_header **)uvc_control_desc;
 	     *src; ++src) {
