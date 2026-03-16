@@ -1180,9 +1180,9 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
-		lpu_raxi_aoutstdcapb = <32>;
-		lpu_raxi_boutstdcapb = <32>;
-		lpu_raxi_ben = <0>;
+		lpu_raxi_aoutstdcapb = <64>;
+		lpu_raxi_boutstdcapb = <64>;
+		lpu_raxi_ben = <1>;
 		lpu_raxi_burstlen = <16>;
 		lpu_raxi_arqos = <15>;
 		lpu_raxi_ord = <0>;
@@ -1216,9 +1216,9 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
-		lpu_raxi_aoutstdcapb = <32>;
-		lpu_raxi_boutstdcapb = <32>;
-		lpu_raxi_ben = <0>;
+		lpu_raxi_aoutstdcapb = <64>;
+		lpu_raxi_boutstdcapb = <64>;
+		lpu_raxi_ben = <1>;
 		lpu_raxi_burstlen = <16>;
 		lpu_raxi_arqos = <15>;
 		lpu_raxi_ord = <0>;
@@ -1252,9 +1252,9 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
-		lpu_raxi_aoutstdcapb = <32>;
-		lpu_raxi_boutstdcapb = <32>;
-		lpu_raxi_ben = <0>;
+		lpu_raxi_aoutstdcapb = <64>;
+		lpu_raxi_boutstdcapb = <64>;
+		lpu_raxi_ben = <1>;
 		lpu_raxi_burstlen = <16>;
 		lpu_raxi_arqos = <15>;
 		lpu_raxi_ord = <0>;
@@ -1288,9 +1288,9 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
-		lpu_raxi_aoutstdcapb = <32>;
-		lpu_raxi_boutstdcapb = <32>;
-		lpu_raxi_ben = <0>;
+		lpu_raxi_aoutstdcapb = <64>;
+		lpu_raxi_boutstdcapb = <64>;
+		lpu_raxi_ben = <1>;
 		lpu_raxi_burstlen = <16>;
 		lpu_raxi_arqos = <15>;
 		lpu_raxi_ord = <0>;
@@ -1324,9 +1324,9 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
-		lpu_raxi_aoutstdcapb = <32>;
-		lpu_raxi_boutstdcapb = <32>;
-		lpu_raxi_ben = <0>;
+		lpu_raxi_aoutstdcapb = <64>;
+		lpu_raxi_boutstdcapb = <64>;
+		lpu_raxi_ben = <1>;
 		lpu_raxi_burstlen = <16>;
 		lpu_raxi_arqos = <15>;
 		lpu_raxi_ord = <0>;
