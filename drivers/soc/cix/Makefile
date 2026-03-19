@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
+obj-y += cix-plat-base.o
 obj-$(CONFIG_CIX_SKY1_SOCINFO) += cix-sky1-socinfo.o
 obj-$(CONFIG_CIX_SE_CONFIG) += cix-se-config.o
 obj-$(CONFIG_CIX_DST) += cix_dst/
