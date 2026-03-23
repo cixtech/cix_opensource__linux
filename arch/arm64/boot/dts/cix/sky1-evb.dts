@@ -2226,6 +2226,7 @@ pinctrl_gmac1: pinctrl_gmac1 {
 	pinctrl-0 = <&pinctrl_pcie_x1_1_rc>;
 	reset-gpios = <&s5_gpio0 5 GPIO_ACTIVE_HIGH>;
 	wake-gpios = <&s5_gpio0 19 GPIO_ACTIVE_HIGH>;
+	sky1,re-pwron-ms = <120>; /* 120ms power cycle delay per NIC spec */
 	status = "okay";
 };
 
