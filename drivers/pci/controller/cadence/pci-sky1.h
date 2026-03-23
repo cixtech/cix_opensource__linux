@@ -150,6 +150,7 @@ struct sky1_pcie {
 	bool is_aer_uncor_panic;
 	bool str_pwron;
 	bool std_pwron;
+	u32 re_pwron_delay_ms;
 	u32 aer_c_irq;
 	u32 aer_f_irq;
 	u32 aer_nf_irq;

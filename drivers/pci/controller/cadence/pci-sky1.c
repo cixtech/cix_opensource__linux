@@ -77,6 +77,10 @@
 
 #define PERST_DELAY_US 1000
 
+/* Power cycle timing */
+/* Delay after power off for capacitor discharge */
+#define POWER_CYCLE_OFF_DELAY_US 3000
+
 /* local interrupt (aer error) */
 #define LOCAL_ERR_PFOVFL BIT(8)
 #define LOCAL_ERR_NPFOVFL BIT(9)
@@ -1255,18 +1259,14 @@ static int sky1_pcie_parse_clocks(struct sky1_pcie *pcie)
 	return 0;
 }
 
-static int sky1_pcie_parse_plat(struct sky1_pcie *pcie)
+static void sky1_pcie_parse_plat(struct sky1_pcie *pcie)
 {
-	int ret = 0;
-
 	if (device_property_read_bool(pcie->dev, "plat-emu"))
 		pcie->plat = PCIE_PLAT_EMU;
 	else if (device_property_read_bool(pcie->dev, "plat-fpga"))
 		pcie->plat = PCIE_PLAT_FPGA;
 	else
 		pcie->plat = PCIE_PLAT_EVK;
-
-	return ret;
 }
 
 static void sky1_pcie_parse_ep_pwr_supply(struct sky1_pcie *pcie)
@@ -1275,6 +1275,9 @@ static void sky1_pcie_parse_ep_pwr_supply(struct sky1_pcie *pcie)
 
 	pcie->str_pwron = device_property_read_bool(dev, "sky1,str-pwron");
 	pcie->std_pwron = device_property_read_bool(dev, "sky1,std-pwron");
+	if (device_property_read_u32(dev, "sky1,re-pwron-ms",
+				     &pcie->re_pwron_delay_ms))
+		pcie->re_pwron_delay_ms = 0;
 
 	/* optional power control for device */
 	pcie->vsupply = devm_regulator_get_optional(dev, "vcc-pcie");
@@ -1350,6 +1353,50 @@ static int sky1_pcie_en_ep_power(struct sky1_pcie *pcie, bool en)
 			en ? "enable" : "disable");
 
 	return ret;
+}
+
+/**
+ * sky1_pcie_safe_power_cycle - Safely perform power cycle on PCIe endpoint device
+ * @pcie: PCIe controller private data structure
+ *
+ * This function implements a safe power cycle (on->off->on) for the PCIe
+ * endpoint device. Mainly used for device reset or re-initialization scenarios.
+ *
+ * Return: 0 on success, negative value on failure
+ */
+static int sky1_pcie_safe_power_cycle(struct sky1_pcie *pcie)
+{
+	int ret;
+
+	if ((pcie->plat == PCIE_PLAT_EMU) || (pcie->plat == PCIE_PLAT_FPGA))
+		return 0;
+
+	if (!pcie->vsupply)
+		return 0;
+
+	/* Power cycle: turn on -> off -> on */
+	ret = sky1_pcie_en_ep_power(pcie, true);
+	if (ret < 0)
+		return ret;
+
+	if (!pcie->re_pwron_delay_ms)
+		return 0;
+
+	ret = sky1_pcie_en_ep_power(pcie, false);
+	if (ret < 0)
+		return ret;
+
+	/* Wait for capacitor discharge after power off */
+	usleep_range(POWER_CYCLE_OFF_DELAY_US, POWER_CYCLE_OFF_DELAY_US + 100);
+
+	ret = sky1_pcie_en_ep_power(pcie, true);
+	if (ret < 0)
+		return ret;
+	/* Wait for endpoint initialization after power on. */
+	msleep(pcie->re_pwron_delay_ms);
+	dev_info(pcie->dev, "power cycle completed, delay %d ms\n",
+		 pcie->re_pwron_delay_ms);
+	return 0;
 }
 
 static int sky1_pcie_en_ep_on(struct sky1_pcie *pcie, bool en)
@@ -1500,9 +1547,7 @@ static int sky1_pcie_parse_property(struct platform_device *pdev,
 	int ret = 0;
 
 	sky1_pcie_parse_ep_pwr_supply(pcie);
-	ret = sky1_pcie_parse_plat(pcie);
-	if (ret < 0)
-		return ret;
+	sky1_pcie_parse_plat(pcie);
 
 	ret = sky1_pcie_parse_ctrl_id(pcie);
 	if (ret < 0)
@@ -2318,11 +2363,11 @@ static int sky1_pcie_probe(struct platform_device *pdev)
 
 	ret = sky1_pcie_parse_property(pdev, pcie);
 	if (ret < 0)
-		return -EINVAL;
+		return ret;
 
-	ret = sky1_pcie_en_ep_power(pcie, true);
+	ret = sky1_pcie_safe_power_cycle(pcie);
 	if (ret < 0)
-		return -EINVAL;
+		return ret;
 
 	ret = sky1_pcie_en_ep_on(pcie, true);
 	if (ret < 0)
