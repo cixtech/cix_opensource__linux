@@ -1097,7 +1097,7 @@ static void trilin_dp_panel_config_msa(struct trilin_dp *dp,
 	int link_rate;
 	int pixel_rate = dp->mode.pclock;
 	int audio_link_rate;
-	u32 regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->stream_id;
+	u32 regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->source_id;
 	struct trilin_connector *conn = dp_panel->connector;
 
 	/* In synchronous mode, set the diviers */
@@ -1153,7 +1153,7 @@ static void trilin_dp_vrr_enable(struct trilin_dp *dp,
 	if (conn && !conn->vrr.enable)
 		return;
 
-	regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->stream_id;
+	regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->source_id;
 	trilin_dp_write(dp, TRILIN_DPTX_SEC0_ADAPTIVE_SYNC_ENABLE + regs_off,
 		1);
 }
@@ -1321,10 +1321,8 @@ void trilin_dp_psr_enable(struct trilin_dp *dp,
 	struct trilin_phy_t *phy = &dp->phy;
 
 	if (dp->psr.active || !dp->psr.enable ||
-		!conn || conn->vrr.enable ||
-		(dp_panel && dp_panel->stream_id != 0)) {
+		!conn || conn->vrr.enable)
 		return;
-	}
 
 	ret = drm_dp_dpcd_readb(&dp->aux, DP_PSR_STATUS, &psr_status);
 	if (ret != 1) {
@@ -1367,7 +1365,7 @@ void trilind_dp_psr_disable(struct trilin_dp *dp,
 	u8 psr_status;
 	struct trilin_phy_t *phy = &dp->phy;
 
-	if (!dp->psr.active || (dp_panel && dp_panel->stream_id != 0))
+	if (!dp->psr.active)
 		return;
 
 	if (!dp->psr.main_link_keep_active) {
@@ -1605,7 +1603,7 @@ static int trilin_dp_panel_config_misc(struct trilin_dp *dp,
 {
 	struct trilin_connector *conn = dp_panel->connector;
 
-	trilin_dp_set_misc(dp, dp_panel->stream_id, &conn->config);
+	trilin_dp_set_misc(dp, dp_panel->source_id, &conn->config);
 	return 0;
 }
 
@@ -1618,7 +1616,7 @@ trilin_dp_panel_setup_colorimetry_sdp(struct trilin_dp *dp,
 	if (conn->config.override & TRILIN_DPTX_STREAM_OVERRIDE_ENABLE) {
 		DP_DEBUG("format=%d colorspace=%0x", conn->config.format, conn->config.colorspace);
 		cix_dptx_setup_vsc_sdp(&conn->sdp[CIX_VSC_SDP], &conn->config);
-		cix_infoframe_write_packet(dp, dp_panel->stream_id, CIX_VSC_SDP,
+		cix_infoframe_write_packet(dp, dp_panel->source_id, CIX_VSC_SDP,
 					   &conn->sdp[CIX_VSC_SDP], 1);
 		if (conn->config.colorspace == DRM_MODE_COLORIMETRY_BT2020_YCC
 			|| conn->config.colorspace == DRM_MODE_COLORIMETRY_BT2020_RGB
@@ -1641,7 +1639,7 @@ static int trilin_dp_panel_setup_avi_sdp(struct trilin_dp *dp,
 		cix_dptx_setup_avi_infoframe(&conn->sdp[CIX_AVI_INFO_SDP],
 					     conn->config.format,
 					     connector_state);
-		cix_infoframe_write_packet(dp, dp_panel->stream_id,
+		cix_infoframe_write_packet(dp, dp_panel->source_id,
 					   CIX_AVI_INFO_SDP,
 					   &conn->sdp[CIX_AVI_INFO_SDP], 1);
 	}
@@ -1658,7 +1656,7 @@ int trilin_dp_panel_setup_hdr_sdp(struct trilin_dp *dp,
 		cix_dp_hdr_metadata_infoframe_sdp_pack(&conn->drm_infoframe,
 						       &conn->sdp[CIX_HDR_SDP],
 						       sizeof(struct dp_sdp));
-		cix_infoframe_write_packet(dp, dp_panel->stream_id, CIX_HDR_SDP,
+		cix_infoframe_write_packet(dp, dp_panel->source_id, CIX_HDR_SDP,
 					   &conn->sdp[CIX_HDR_SDP], 1);
 	}
 	return 0;
@@ -1690,10 +1688,10 @@ void trilin_dp_panel_hw_cfg(struct trilin_dp *dp,
 	trilin_dp_panel_setup_hdr_sdp(dp, dp_panel);
 	trilin_dp_vrr_enable(dp, dp_panel);
 	//set transfer unit..
-	trilin_dp_mode_set_transfer_unit(dp, dp_panel->stream_id, mode,
+	trilin_dp_mode_set_transfer_unit(dp, dp_panel->source_id, mode,
 					 conn->config.bpp);
 	//v_active h_active totalhor_ver,polarity...widebus_en
-	trilin_dp_mode_set_timing(dp, dp_panel->stream_id, mode,
+	trilin_dp_mode_set_timing(dp, dp_panel->source_id, mode,
 				  conn->config.bpp);
 }
 /* ------------------------------------------------------------------------------
@@ -1713,22 +1711,21 @@ static void trilin_dp_ctrl_set_mst_channel_info(struct trilin_dp *dp,
 }
 
 int trilin_dp_set_stream_info(struct trilin_dp *dp,
-			      struct trilin_dp_panel *dp_panel, u32 stream_id,
+			      struct trilin_dp_panel *dp_panel, u32 source_id,
 			      u32 start_slot, u32 num_slots)
 {
 	int rc = 0;
 	const int max_slots = 64;
 
-	if (stream_id >= dp->max_streams) {
-		DP_WARN("invalid stream id:%d\n", stream_id);
+	if (source_id >= dp->max_streams) {
+		DP_WARN("invalid source id:%d\n", source_id);
 		return -EINVAL;
 	}
 
-	if (dp_panel && dp_panel->stream_id != stream_id) {
-		DP_WARN("invalid stream id:%d -- pannel stream: %d\n",
-			stream_id, dp_panel->stream_id);
-		dp_panel->stream_id = stream_id;
-		//return -EINVAL;
+	if (dp_panel && dp_panel->source_id != source_id) {
+		DP_WARN("invalid source id:%d -- panel source: %d\n",
+			source_id, dp_panel->source_id);
+		dp_panel->source_id = source_id;
 	}
 
 	if (start_slot + num_slots > max_slots) {
@@ -1738,12 +1735,12 @@ int trilin_dp_set_stream_info(struct trilin_dp *dp,
 	}
 
 	mutex_lock(&dp->session_lock);
-	trilin_dp_ctrl_set_mst_channel_info(dp, stream_id, start_slot,
+	trilin_dp_ctrl_set_mst_channel_info(dp, source_id, start_slot,
 					    num_slots);
 	mutex_unlock(&dp->session_lock);
 
 	if (!dp_panel)
-		DP_WARN("dp_panel did not init for stream %d", stream_id);
+		DP_WARN("dp_panel did not init for source %d", source_id);
 
 	return rc;
 }
@@ -1819,17 +1816,17 @@ static int trilin_dp_ctrl_enable_stream_clocks(struct trilin_dp *dp,
 	if (dp->platform_id != CIX_PLATFORM_SOC)
 		return rc;
 
-	if (dp_panel->stream_id == DP_STREAM_0) {
+	if (dp_panel->source_id == DP_STREAM_0) {
 		vid_clk = dp->dpsub->vid_clk0;
-	} else if (dp_panel->stream_id == DP_STREAM_1) {
+	} else if (dp_panel->source_id == DP_STREAM_1) {
 		vid_clk = dp->dpsub->vid_clk1;
-	} else if (dp_panel->stream_id == DP_STREAM_2) {
+	} else if (dp_panel->source_id == DP_STREAM_2) {
 		vid_clk = dp->dpsub->vid_clk2;
-	} else if (dp_panel->stream_id == DP_STREAM_3) {
+	} else if (dp_panel->source_id == DP_STREAM_3) {
 		vid_clk = dp->dpsub->vid_clk3;
 	} else {
-		DP_ERR("Invalid stream:%d for clk %s\n",
-		       dp_panel->stream_id, enable ? "enable" : "disable");
+		DP_ERR("Invalid source:%d for clk %s\n",
+		       dp_panel->source_id, enable ? "enable" : "disable");
 		return -EINVAL;
 	}
 
@@ -1838,7 +1835,7 @@ static int trilin_dp_ctrl_enable_stream_clocks(struct trilin_dp *dp,
 	else if (__clk_is_enabled(vid_clk))
 		clk_disable_unprepare(vid_clk);
 
-	DP_DEBUG("%s stream%d clk", enable ? "enable" : "disable", dp_panel->stream_id);
+	DP_DEBUG("%s source%d clk", enable ? "enable" : "disable", dp_panel->source_id);
 	return rc;
 }
 
@@ -1847,7 +1844,7 @@ static int trilin_dp_ctrl_stream_on(struct trilin_dp *dp,
 {
 	int rc = 0;
 	struct dptx_audio *dp_audio = &dp->dp_audio;
-	u32 regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->stream_id;
+	u32 regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->source_id;
 
 	/*enable stream power and clock*/
 	trilin_dp_ctrl_enable_stream_clocks(dp, dp_panel, true);
@@ -1871,11 +1868,11 @@ end:
 		dptx_audio_reconfig_and_enable(dp);
 	}
 
-	dp->active_panels[dp_panel->stream_id] = dp_panel;
+	dp->active_panels[dp_panel->source_id] = dp_panel;
 	dp->active_stream_cnt++;
 
-	DP_INFO("trilin_dp_encoder_enable stream_id=%d, active_stream_cnt:%d\n",
-		dp_panel->stream_id, dp->active_stream_cnt);
+	DP_INFO("trilin_dp_encoder_enable source_id=%d, active_stream_cnt:%d\n",
+		dp_panel->source_id, dp->active_stream_cnt);
 
 	return rc;
 }
@@ -1883,7 +1880,7 @@ end:
 static int trilin_dp_ctrl_stream_off(struct trilin_dp *dp,
 				     struct trilin_dp_panel *dp_panel)
 {
-	u32 regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->stream_id;
+	u32 regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->source_id;
 
 	if (dp->edp_panel) {
 		if (drm_panel_disable(dp->edp_panel))
@@ -1903,11 +1900,11 @@ static int trilin_dp_ctrl_stream_off(struct trilin_dp *dp,
 	trilin_dp_write(dp, TRILIN_DPTX_VIDEO_STREAM_ENABLE + regs_off, 0);
 	trilin_dp_ctrl_enable_stream_clocks(dp, dp_panel, false);
 
-	dp->active_panels[dp_panel->stream_id] = NULL;
+	dp->active_panels[dp_panel->source_id] = NULL;
 	dp->active_stream_cnt--;
 
-	DP_INFO("trilin_dp_encoder_disable stream_id=%d, active_stream_cnt=%d\n",
-		dp_panel->stream_id, dp->active_stream_cnt);
+	DP_INFO("trilin_dp_encoder_disable source_id=%d, active_stream_cnt=%d\n",
+		dp_panel->source_id, dp->active_stream_cnt);
 
 	return 0;
 }
@@ -1930,8 +1927,8 @@ static int trilin_dp_stream_disable(struct trilin_dp *dp,
 	if (!dp->active_stream_cnt)
 		return 0;
 
-	if (dp_panel->stream_id == dp->max_streams ||
-			!dp->active_panels[dp_panel->stream_id]) {
+	if (dp_panel->source_id == dp->max_streams ||
+			!dp->active_panels[dp_panel->source_id]) {
 		DP_ERR("panel is already disabled\n");
 		return 0;
 	}
@@ -2033,7 +2030,7 @@ static int trilin_dp_core_on(struct trilin_dp *dp, bool shallow)
 	int rc = 0;
 	struct trilin_phy_t *phy = &dp->phy;
 	bool fast_train_success = false;
-	int enable_sources = 0x1; //enable stream 0
+	int enable_sources =  (1 << dp->dp_panel.source_id);
 	int i;
 
 	DP_DEBUG("enter");
@@ -2050,7 +2047,6 @@ static int trilin_dp_core_on(struct trilin_dp *dp, bool shallow)
 		return rc;
 	}
 
-	/*Fixme: stream 0 and 1; should follow active_nums..*/
 	if (dp->mst.mst_active)
 		enable_sources = (1 << dp->max_streams) - 1;
 
@@ -2097,6 +2093,8 @@ static int trilin_dp_core_on(struct trilin_dp *dp, bool shallow)
 	trilin_dp_write(dp, TRILIN_DPTX_SOURCE_ENABLE, enable_sources);
 	trilin_dp_write(dp, TRILIN_DPTX_FORCE_SCRAMBLER_RESET, enable_sources);
 	trilin_dp_write(dp, TRILIN_DPTX_MST_ENABLE, dp->mst.mst_active);
+	if (!dp->mst.mst_active)
+		trilin_dp_write(dp, TRILIN_DPTX_SST_SOURCE_SELECT, dp->dp_panel.source_id);
 
 	if (!rc)
 		DP_INFO("main link training done! rate:%d lanes:%d %s\n",
@@ -2321,7 +2319,7 @@ static int trilin_dp_clear_info(struct trilin_dp *dp,
 				struct trilin_dp_panel *dp_panel)
 {
 	struct trilin_connector *conn = dp_panel->connector;
-	const int id = dp_panel->stream_id;
+	const int id = dp_panel->source_id;
 
 	memset(&(dp->mst_ch_info.slot_info[id]), 0,
 	       sizeof(struct trilin_dp_mst_ch_slot_info));

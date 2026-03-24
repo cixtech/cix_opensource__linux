@@ -20,6 +20,7 @@
 #include <linux/phy/phy.h>
 #include <linux/reset.h>
 #include <linux/kernel.h>
+#include <linux/property.h>
 
 #include "trilin_dptx_reg.h"
 #include "trilin_host_tmr.h"
@@ -591,7 +592,7 @@ static bool is_same_mode_compare(struct trilin_dp *dp,
 	u32 hswidth, vswidth, hres, vres;
 	u32 hstart, vstart;
 	u32 link_rate, sec_data_window, sec_data_window_comp;
-	u32 regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->stream_id;
+	u32 regs_off = TRILIN_DPTX_SOURCE_OFFSET * dp_panel->source_id;
 
 	htotal = trilin_dp_read(dp,
 				TRILIN_DPTX_SRC0_MAIN_STREAM_HTOTAL + regs_off);
@@ -665,7 +666,7 @@ static void trilin_dp_encoder_enable(struct drm_encoder *encoder,
 	}
 
 	/*stream on*/
-	trilin_dp_set_stream_info(dp, dp_panel, 0, 0, 0);
+	trilin_dp_set_stream_info(dp, dp_panel, dp_panel->source_id, 0, 0);
 
 	rc = trilin_dp_enable(dp, dp_panel);
 	if (rc) {
@@ -1195,7 +1196,14 @@ int trilin_dp_drm_init(struct trilin_dpsub *dpsub)
 	conn->dp = dp;
 	conn->type = TRILIN_OUTPUT_DP;
 	/* Create the DRM encoder and connector. */
-	encoder->possible_crtcs = TRILIN_DPTX_POSSIBLE_CRTCS_SST;
+	if (dp->dev && dp->dev->of_node)
+		encoder->possible_crtcs = drm_of_find_possible_crtcs(dp->drm[0],
+								   dp->dev->of_node);
+	if (!encoder->possible_crtcs)
+		encoder->possible_crtcs = TRILIN_DPTX_POSSIBLE_CRTCS_SST;
+	DRM_INFO("DP encoder possible_crtcs=0x%x (from %s)\n",
+		 encoder->possible_crtcs,
+		 (dp->dev && dp->dev->of_node) ? "DT" : "fallback");
 	drm_encoder_init(dp->drm[0], encoder, &trilin_dp_enc_funcs,
 			 DRM_MODE_ENCODER_TMDS, NULL);
 
@@ -1223,8 +1231,17 @@ int trilin_dp_drm_init(struct trilin_dpsub *dpsub)
 	if (!IS_ERR_OR_NULL(dp->rcsu_iomem))
 		connector->ycbcr_420_allowed = true;
 	dp->dp_panel.connector = &dp->connector;
-	dp->dp_panel.stream_id = 0;
+	/* SST: single stream; source from DTS cix,dp-source. */
+	dp->dp_panel.source_id = 0;
+	if (dp->dev) {
+		u32 dp_source;
+
+		if (device_property_read_u32(dp->dev, "cix,dp-source", &dp_source) == 0 &&
+		    dp_source < dp->max_streams)
+			dp->dp_panel.source_id = dp_source;
+	}
 	dp->connector.dp_panel = &dp->dp_panel;
+	DP_INFO("SST dp_panel.source_id=%u\n", dp->dp_panel.source_id);
 	/*
 	 * Some of the properties below require access to state, like bpc.
 	 */

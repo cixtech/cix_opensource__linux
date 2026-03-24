@@ -347,10 +347,10 @@ enum trilin_dptx_state {
 };
 
 struct trilin_dp_panel {
-	/* By default, stream_id is assigned to DP_INVALID_STREAM.
-	 * Client sets the stream id value using set_stream_id interface.
+	/* Which DP TX hardware source block (0/1/...) for register access; regs use TRILIN_DPTX_SOURCE_OFFSET * source_id.
+	 * MST/SST: from DTS "cix,dp-source" or MST pipe_id, default 0.
 	 */
-	enum trilin_dp_stream_id stream_id;
+	u32 source_id;
 	/* DRM connector assosiated with this panel */
 	struct trilin_connector *connector;
 };
@@ -560,7 +560,7 @@ int trilin_dp_pre_disable(struct trilin_dp *dp, struct trilin_dp_panel *panel);
 int trilin_dp_disable(struct trilin_dp *dp, struct trilin_dp_panel *panel);
 int trilin_dp_unprepare(struct trilin_dp *dp);
 int trilin_dp_set_stream_info(struct trilin_dp *dp,
-			      struct trilin_dp_panel *dp_panel, u32 stream_id,
+			      struct trilin_dp_panel *dp_panel, u32 source_id,
 			      u32 start_slot, u32 num_slots);
 int trilin_dp_panel_setup_hdr_sdp(struct trilin_dp *dp,
 				  struct trilin_dp_panel *dp_panel);

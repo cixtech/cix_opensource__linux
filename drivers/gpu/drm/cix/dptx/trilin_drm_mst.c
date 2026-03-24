@@ -243,7 +243,7 @@ trilin_dp_add_mst_connector(struct drm_dp_mst_topology_mgr *mgr,
 	for (i = 0; i < dp->max_mst_encoders; i++) {
 		if (!dp->mst.mst_panels[i].in_use) {
 			dp->mst.mst_panels[i].in_use = true;
-			dp->mst.mst_panels[i].panel.stream_id = i;
+			dp->mst.mst_panels[i].panel.source_id = i;
 			dp->mst.mst_panels[i].panel.connector = conn;
 			conn->dp_panel = &dp->mst.mst_panels[i].panel;
 			break;
@@ -262,7 +262,7 @@ trilin_dp_add_mst_connector(struct drm_dp_mst_topology_mgr *mgr,
 	conn->type = TRILIN_OUTPUT_DP_MST;
 	conn->drm = dp->drm[0];
 
-	if (dp->drm[1] != NULL && conn->dp_panel->stream_id >= 2)
+	if (dp->drm[1] != NULL && conn->dp_panel->source_id >= 2)
 		conn->drm = dp->drm[1];
 
 	connector = &conn->base;
@@ -313,9 +313,9 @@ trilin_dp_add_mst_connector(struct drm_dp_mst_topology_mgr *mgr,
 		drm_connector_attach_max_bpc_property(connector, 8, 10);
 
 	DP_MST_INFO(
-		"Successfully create mst connector=%d pathprop=%s port=%d stream_id=%d\n",
+		"Successfully create mst connector=%d pathprop=%s port=%d source_id=%d\n",
 		connector->base.id, pathprop, port->port_num,
-		conn->dp_panel->stream_id);
+		conn->dp_panel->source_id);
 	return connector;
 
 err:
@@ -356,14 +356,14 @@ static void trilin_dp_mst_connector_destroy(struct drm_connector *connector)
 {
 	struct trilin_connector *conn = connector_to_trilin(connector);
 	struct trilin_dp *dp = conn->dp;
-	uint32_t id = conn->dp_panel->stream_id;
+	uint32_t id = conn->dp_panel->source_id;
 	int i;
 
 	DP_MST_DEBUG("enter: connector=%d stream%d port%d\n",
 		     connector->base.id, id, conn->port->port_num);
 
 	for (i = 0; i < dp->max_mst_encoders; i++) {
-		if (dp->mst.mst_panels[i].panel.stream_id == id) {
+		if (dp->mst.mst_panels[i].panel.source_id == id) {
 			dp->mst.mst_panels[i].in_use = false;
 			break;
 		}
@@ -460,7 +460,7 @@ trilin_mst_atomic_best_encoder(struct drm_connector *connector,
 		pipe_id = 0;
 	}
 	/*Todo..Fixme..*/
-	pipe_id = conn->dp_panel->stream_id;
+	pipe_id = conn->dp_panel->source_id;
 
 	mst_encoder = &mst->mst_encoders[pipe_id];
 	if (mst_encoder->id != pipe_id) {
@@ -470,17 +470,17 @@ trilin_mst_atomic_best_encoder(struct drm_connector *connector,
 	}
 
 	/* encoder can be choose from different connector*/
-	if (conn->dp_panel->stream_id != pipe_id) {
-		DP_WARN("conn->dp_panel->stream_id=%d but pipe=%d. align it to pipe_id",
-			conn->dp_panel->stream_id, pipe_id);
-		conn->dp_panel->stream_id = pipe_id;
+	if (conn->dp_panel->source_id != pipe_id) {
+		DP_WARN("conn->dp_panel->source_id=%d but pipe=%d. align it to pipe_id",
+			conn->dp_panel->source_id, pipe_id);
+		conn->dp_panel->source_id = pipe_id;
 	}
 
 	mst_encoder->connector = conn;
 	mst_encoder->dp_panel = conn->dp_panel;
 	DP_MST_DEBUG(
-		"pipe=%d mst_encoder->id=%d stream=%d enable=%d connect_id=%d",
-		pipe_id, mst_encoder->id, conn->dp_panel->stream_id,
+		"pipe=%d mst_encoder->id=%d source_id=%d enable=%d connect_id=%d",
+		pipe_id, mst_encoder->id, conn->dp_panel->source_id,
 		mst_encoder->enable, connector->base.id);
 	return &mst_encoder->base;
 }
