@@ -2839,14 +2839,37 @@ unlock:
 
 int trilin_dp_pm_prepare(struct trilin_dp *dp)
 {
+	struct trilin_dpsub *dpsub = dp->dpsub;
+	int i;
+
+	/*
+	 * Stop KMS connector polling before DP host teardown so output_poll_execute
+	 * cannot run drm_get_edid/AUX after the controller is shut down. Order is
+	 * independent of dpm_list; drm_mode_config_helper_suspend() will call
+	 * poll_disable again (idempotent).
+	 */
+	if (dpsub) {
+		for (i = 0; i < LINLON_KMS_SIZE; i++) {
+			struct drm_device *drm = dpsub->drm[i];
+
+			if (!drm)
+				break;
+			if (drm->mode_config.poll_enabled)
+				drm_kms_helper_poll_disable(drm);
+		}
+	}
+
 	mutex_lock(&dp->session_lock);
 	DP_DEBUG("enter");
 	trilin_dp_mst_suspend(dp);
 	mutex_unlock(&dp->session_lock);
+	/* Disable IRQ before draining work so the ISR cannot re-queue between
+	 * cancel_delayed_work_sync() and disable_irq().
+	 */
+	disable_irq(dp->irq);
 	cancel_delayed_work_sync(&dp->hpd_irq_work);
 	cancel_delayed_work_sync(&dp->hpd_event_work);
 	mutex_lock(&dp->session_lock);
-	disable_irq(dp->irq);
 	dp->state |= DPTX_STATE_SUSPENDED;
 	if (!dp->active_stream_cnt) {
 		DP_DEBUG("no active stream. just deinit");
@@ -2860,6 +2883,9 @@ int trilin_dp_pm_prepare(struct trilin_dp *dp)
 
 int trilin_dp_pm_complete(struct trilin_dp *dp)
 {
+	struct trilin_dpsub *dpsub = dp->dpsub;
+	int i;
+
 	mutex_lock(&dp->session_lock);
 	DP_DEBUG("enter");
 	if (!(dp->state & DPTX_STATE_SUSPENDED))
@@ -2870,6 +2896,20 @@ int trilin_dp_pm_complete(struct trilin_dp *dp)
 	enable_irq(dp->irq);
 	trilin_dp_mst_resume(dp);
 	dp->state &= ~DPTX_STATE_SUSPENDED;
+
+	/* Re-enable polling after IRQ and MST are back; redundant if resume already
+	 * called drm_kms_helper_poll_enable() (idempotent).
+	 */
+	if (dpsub) {
+		for (i = 0; i < LINLON_KMS_SIZE; i++) {
+			struct drm_device *drm = dpsub->drm[i];
+
+			if (!drm)
+				break;
+			if (drm->mode_config.poll_enabled)
+				drm_kms_helper_poll_enable(drm);
+		}
+	}
 end:
 	mutex_unlock(&dp->session_lock);
 	return 0;
