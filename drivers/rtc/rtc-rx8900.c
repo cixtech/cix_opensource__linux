@@ -51,7 +51,7 @@
 #include <linux/rtc.h>
 #include <linux/time.h>
 #include <linux/input.h>
-#ifdef CONFIG_SOC_CIX
+#ifdef CONFIG_CIX_DST
 #include <linux/soc/cix/cix_suspend.h>
 #endif
 
@@ -267,7 +267,7 @@ static void rx8900_work(struct work_struct *work)
 
 	spin_lock(&rx8900->lock);
 	if (rx8900->suspended == true) {
-#ifdef CONFIG_SOC_CIX
+#ifdef CONFIG_CIX_DST
 		suspend_warning_set(client->name, SUSPEND_WARN_TYPE_ABORTED);
 #endif
 		pm_system_wakeup();
@@ -973,7 +973,7 @@ static int rx8900_suspend(struct device *dev)
 
 	if (client->irq > 0 && device_may_wakeup(dev)) {
 		spin_lock_irqsave(&rx8900->lock, irq_flags);
-#ifdef CONFIG_SOC_CIX
+#ifdef CONFIG_CIX_DST
 		suspend_warning_clear();
 #endif
 		rx8900->suspended = true;
