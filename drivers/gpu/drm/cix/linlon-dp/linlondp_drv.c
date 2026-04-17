@@ -17,7 +17,7 @@
 #include "linlondp_dev.h"
 #include "linlondp_kms.h"
 
-static bool enable_fb = true;
+bool enable_fb = true;
 module_param_named(enable_fb, enable_fb, bool, 0644);
 MODULE_PARM_DESC(enable_fb, "Enable/Disable drm framebuffer support");
 
@@ -26,11 +26,32 @@ struct linlondp_drv {
 	struct linlondp_kms_dev *kms;
 };
 
+/*
+ * Cluster slave probe stores linlondp_dev * in drvdata; component master stores
+ * struct linlondp_drv *.  DT "cix,linlon-dpu-slave" is not always present; a
+ * real linlondp_dev always has mdev->dev == dev.  Mis-reading slave drvdata as
+ * mdrv made mdrv->mdev NULL in rt_pm_resume (e.g. modetest).
+ */
+static bool linlondp_drvdata_is_direct_mdev(struct device *dev)
+{
+	void *drv = dev_get_drvdata(dev);
+
+	return drv && ((struct linlondp_dev *)drv)->dev == dev;
+}
+
 struct linlondp_dev *dev_to_mdev(struct device *dev)
 {
-	struct linlondp_drv *mdrv = dev_get_drvdata(dev);
+	void *drv = dev_get_drvdata(dev);
+	struct linlondp_drv *mdrv;
 
-	return mdrv ? mdrv->mdev : NULL;
+	if (!drv)
+		return NULL;
+
+	if (linlondp_drvdata_is_direct_mdev(dev))
+		return drv;
+
+	mdrv = drv;
+	return mdrv->mdev;
 }
 
 static void linlondp_unbind(struct device *dev)
@@ -165,6 +186,50 @@ static void linlondp_add_slave(struct device *master,
 	}
 }
 
+int linlondp_dpu_add_graph_slaves(struct device *master,
+				  struct component_match **match,
+				  struct device *dpu_dev)
+{
+	struct device_node *np = dpu_dev->of_node;
+	struct device_node *of_child;
+
+	if (!np)
+		return 0;
+
+	for_each_available_child_of_node(np, of_child) {
+		if (of_node_cmp(of_child->name, "pipeline") != 0)
+			continue;
+
+		linlondp_add_slave(master, match, of_child,
+				   LINLONDP_OF_PORT_OUTPUT, 0);
+		linlondp_add_slave(master, match, of_child,
+				   LINLONDP_OF_PORT_OUTPUT, 1);
+	}
+
+	return 0;
+}
+
+static int linlondp_dpu_slave_probe(struct platform_device *pdev)
+{
+	struct linlondp_dev *mdev;
+
+	mdev = linlondp_dev_create(&pdev->dev);
+	if (IS_ERR(mdev))
+		return PTR_ERR(mdev);
+	platform_set_drvdata(pdev, mdev);
+	return 0;
+}
+
+static int linlondp_dpu_slave_remove(struct platform_device *pdev)
+{
+	struct linlondp_dev *mdev = platform_get_drvdata(pdev);
+
+	if (mdev)
+		linlondp_dev_destroy(mdev);
+	platform_set_drvdata(pdev, NULL);
+	return 0;
+}
+
 static int linlondp_platform_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -172,6 +237,9 @@ static int linlondp_platform_probe(struct platform_device *pdev)
 	struct fwnode_handle *acpi_child;
 	struct device_node *of_child;
 	const char *tmp_name = NULL;
+
+	if (device_property_read_bool(dev, "cix,linlon-dpu-slave"))
+		return linlondp_dpu_slave_probe(pdev);
 
 	pr_info("%s enter. dev.name=%s\n", __func__, dev_name(dev));
 	pr_info("linlondp enable fb is %d", enable_fb);
@@ -215,6 +283,8 @@ static int linlondp_platform_probe(struct platform_device *pdev)
 
 static int linlondp_platform_remove(struct platform_device *pdev)
 {
+	if (device_property_read_bool(&pdev->dev, "cix,linlon-dpu-slave"))
+		return linlondp_dpu_slave_remove(pdev);
 #if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 	component_master_del(&pdev->dev, &linlondp_master_ops);
 #else
@@ -253,22 +323,16 @@ MODULE_DEVICE_TABLE(acpi, linlondp_acpi_match);
 
 static int __maybe_unused linlondp_rt_pm_suspend(struct device *dev)
 {
-	struct linlondp_drv *mdrv = dev_get_drvdata(dev);
+	struct linlondp_dev *mdev = dev_to_mdev(dev);
 
-	if (mdrv)
-		return linlondp_dev_suspend(mdrv->mdev);
-	else
-		return 0;
+	return mdev ? linlondp_dev_suspend(mdev) : 0;
 }
 
 static int __maybe_unused linlondp_rt_pm_resume(struct device *dev)
 {
-	struct linlondp_drv *mdrv = dev_get_drvdata(dev);
+	struct linlondp_dev *mdev = dev_to_mdev(dev);
 
-	if (mdrv)
-		return linlondp_dev_resume(mdrv->mdev);
-	else
-		return 0;
+	return mdev ? linlondp_dev_resume(mdev) : 0;
 }
 
 static int __maybe_unused linlondp_pm_suspend(struct device *dev)
@@ -277,6 +341,15 @@ static int __maybe_unused linlondp_pm_suspend(struct device *dev)
 	int res;
 
 	dev_info(dev, "%s\n", __func__);
+
+	if (linlondp_drvdata_is_direct_mdev(dev)) {
+		struct linlondp_dev *mdev = dev_get_drvdata(dev);
+
+		if (!pm_runtime_status_suspended(dev))
+			linlondp_dev_suspend(mdev);
+		mdev->enabled_by_gop = 0;
+		return 0;
+	}
 
 	if (!mdrv) {
 		dev_info(dev, "%s, mdrv is null\n", __func__);
@@ -306,6 +379,14 @@ static int __maybe_unused linlondp_pm_resume(struct device *dev)
 
 	dev_info(dev, "%s\n", __func__);
 
+	if (linlondp_drvdata_is_direct_mdev(dev)) {
+		struct linlondp_dev *mdev = dev_get_drvdata(dev);
+
+		if (!pm_runtime_status_suspended(dev))
+			linlondp_dev_resume(mdev);
+		return 0;
+	}
+
 	if (!mdrv) {
 		dev_info(dev, "%s, mdrv is null\n", __func__);
 		return 0;
@@ -320,9 +401,23 @@ static int __maybe_unused linlondp_pm_resume(struct device *dev)
 static int __maybe_unused linlondp_pm_restore(struct device *dev)
 {
 	struct linlondp_drv *mdrv = dev_get_drvdata(dev);
+	u32 gop;
 
-	of_property_read_u32(dev->of_node, "enabled_by_gop",
-			     (u32 *)&mdrv->mdev->enabled_by_gop);
+	if (linlondp_drvdata_is_direct_mdev(dev)) {
+		struct linlondp_dev *mdev = dev_get_drvdata(dev);
+
+		if (device_property_read_u32(dev, "enabled_by_gop", &gop) == 0)
+			mdev->enabled_by_gop = gop;
+		if (!pm_runtime_status_suspended(dev))
+			linlondp_dev_resume(mdev);
+		return 0;
+	}
+
+	if (!mdrv)
+		return 0;
+
+	if (device_property_read_u32(dev, "enabled_by_gop", &gop) == 0)
+		mdrv->mdev->enabled_by_gop = gop;
 
 	if (!pm_runtime_status_suspended(dev))
 		linlondp_dev_resume(mdrv->mdev);
@@ -332,7 +427,17 @@ static int __maybe_unused linlondp_pm_restore(struct device *dev)
 
 static void linlondp_platform_shutdown(struct platform_device *pdev)
 {
-	struct linlondp_drv *mdrv = dev_get_drvdata(&pdev->dev);
+	struct linlondp_drv *mdrv;
+
+	if (linlondp_drvdata_is_direct_mdev(&pdev->dev)) {
+		struct linlondp_dev *mdev = platform_get_drvdata(pdev);
+
+		linlondp_dev_suspend(mdev);
+		mdev->shutdown = true;
+		return;
+	}
+
+	mdrv = dev_get_drvdata(&pdev->dev);
 
 	linlondp_pm_suspend(&pdev->dev);
 
@@ -362,7 +467,34 @@ static struct platform_driver linlondp_platform_driver = {
 	},
 };
 
-drm_module_platform_driver(linlondp_platform_driver);
+extern struct platform_driver linlondp_cluster_driver;
+
+static int __init linlondp_mod_init(void)
+{
+	int err;
+
+	err = drm_platform_driver_register(&linlondp_platform_driver);
+	if (err)
+		return err;
+	err = drm_platform_driver_register(&linlondp_cluster_driver);
+	if (err)
+		goto err_cluster;
+
+	return 0;
+
+err_cluster:
+	platform_driver_unregister(&linlondp_platform_driver);
+	return err;
+}
+
+static void __exit linlondp_mod_exit(void)
+{
+	platform_driver_unregister(&linlondp_cluster_driver);
+	platform_driver_unregister(&linlondp_platform_driver);
+}
+
+module_init(linlondp_mod_init);
+module_exit(linlondp_mod_exit);
 
 MODULE_DESCRIPTION("Linlondp KMS driver");
 MODULE_AUTHOR("ARMChina");

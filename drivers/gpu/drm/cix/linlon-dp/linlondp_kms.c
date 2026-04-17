@@ -6,6 +6,7 @@
  */
 #include <linux/component.h>
 #include <linux/interrupt.h>
+#include <linux/iommu.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
@@ -17,6 +18,7 @@
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 #include <drm/drm_self_refresh_helper.h>
+#include <drm/drm_gem.h>
 
 #include "linlondp_dev.h"
 #include "linlondp_framebuffer.h"
@@ -28,36 +30,237 @@ static bool enable_render = true;
 module_param(enable_render, bool, 0644);
 MODULE_PARM_DESC(enable_render, "Enable render node support (true/false)");
 
+#if IS_ENABLED(CONFIG_IOMMU_API)
+/*
+ * Cluster KMS allocates GEM/DMA on dpu0's struct device only. Each DPU has
+ * distinct SMMU stream IDs; the same IOVA must be mapped in every master's
+ * IOMMU domain or non-primary DPUs see AXI errors (AXIE) on scanout.
+ */
+static void linlondp_cluster_iommu_unmap_mirror(struct linlondp_kms_dev *kms,
+						struct drm_gem_dma_object *dma_obj)
+{
+	struct iommu_domain *d0;
+	dma_addr_t iova = dma_obj->dma_addr;
+	size_t size = dma_obj->base.size;
+	unsigned long off;
+	unsigned int i;
+
+	d0 = iommu_get_domain_for_dev(kms->hw_mdevs[0]->dev);
+
+	for (i = 1; i < kms->n_hw_mdevs; i++) {
+		struct iommu_domain *di =
+			iommu_get_domain_for_dev(kms->hw_mdevs[i]->dev);
+
+		if (!di || di == d0)
+			continue;
+		for (off = 0; off < size; off += PAGE_SIZE) {
+			if (iommu_iova_to_phys(di, iova + off))
+				iommu_unmap(di, iova + off, PAGE_SIZE);
+		}
+	}
+}
+
+static int linlondp_cluster_iommu_map_mirror(struct linlondp_kms_dev *kms,
+					   struct drm_gem_dma_object *dma_obj)
+{
+	struct iommu_domain *d0;
+	dma_addr_t iova = dma_obj->dma_addr;
+	size_t size = dma_obj->base.size;
+	unsigned long off;
+	unsigned int i;
+	int ret;
+	const int prot = IOMMU_READ | IOMMU_WRITE;
+
+	d0 = iommu_get_domain_for_dev(kms->hw_mdevs[0]->dev);
+
+	if (!d0) {
+		if (!dma_obj->vaddr) {
+			DRM_WARN("linlon cluster: skip IOMMU mirror (no dpu0 domain, no vaddr)\n");
+			return 0;
+		}
+		for (i = 1; i < kms->n_hw_mdevs; i++) {
+			struct iommu_domain *di =
+				iommu_get_domain_for_dev(kms->hw_mdevs[i]->dev);
+
+			if (!di)
+				continue;
+			for (off = 0; off < size; off += PAGE_SIZE) {
+				phys_addr_t phys = virt_to_phys(
+					(char *)dma_obj->vaddr + off);
+
+				ret = iommu_map(di, iova + off, phys, PAGE_SIZE,
+						prot, GFP_KERNEL);
+				if (ret) {
+					linlondp_cluster_iommu_unmap_mirror(kms,
+									    dma_obj);
+					return ret;
+				}
+			}
+		}
+		return 0;
+	}
+
+	for (i = 1; i < kms->n_hw_mdevs; i++) {
+		struct iommu_domain *di =
+			iommu_get_domain_for_dev(kms->hw_mdevs[i]->dev);
+
+		if (!di || di == d0)
+			continue;
+		for (off = 0; off < size; off += PAGE_SIZE) {
+			phys_addr_t phys = iommu_iova_to_phys(d0, iova + off);
+
+			if (!phys) {
+				DRM_ERROR(
+					"linlon cluster: no PA for IOVA %pad+%lx in dpu0 IOMMU domain\n",
+					&iova, off);
+				linlondp_cluster_iommu_unmap_mirror(kms, dma_obj);
+				return -EFAULT;
+			}
+			ret = iommu_map(di, iova + off, phys, PAGE_SIZE, prot,
+					GFP_KERNEL);
+			if (ret) {
+				DRM_ERROR(
+					"linlon cluster: IOMMU map DPU%u IOVA %pad: %d\n",
+					i, &iova, ret);
+				linlondp_cluster_iommu_unmap_mirror(kms, dma_obj);
+				return ret;
+			}
+		}
+	}
+	return 0;
+}
+#else
+static void linlondp_cluster_iommu_unmap_mirror(struct linlondp_kms_dev *kms,
+						struct drm_gem_dma_object *dma_obj)
+{
+	(void)kms;
+	(void)dma_obj;
+}
+
+static int linlondp_cluster_iommu_map_mirror(struct linlondp_kms_dev *kms,
+					   struct drm_gem_dma_object *dma_obj)
+{
+	(void)kms;
+	(void)dma_obj;
+	return 0;
+}
+#endif
+
+static void linlondp_cluster_gem_free(struct drm_gem_object *obj);
+
+static const struct drm_gem_object_funcs linlondp_cluster_gem_funcs = {
+	.free = linlondp_cluster_gem_free,
+	.print_info = drm_gem_dma_object_print_info,
+	.get_sg_table = drm_gem_dma_object_get_sg_table,
+	.vmap = drm_gem_dma_object_vmap,
+	.mmap = drm_gem_dma_object_mmap,
+	.vm_ops = &drm_gem_dma_vm_ops,
+};
+
+static void linlondp_cluster_gem_free(struct drm_gem_object *obj)
+{
+	struct drm_gem_dma_object *dma_obj = to_drm_gem_dma_obj(obj);
+	struct drm_device *drm = obj->dev;
+	struct linlondp_kms_dev *kms = to_kdev(drm);
+
+	if (kms->n_hw_mdevs > 1)
+		linlondp_cluster_iommu_unmap_mirror(kms, dma_obj);
+	drm_gem_dma_object_free(obj);
+}
+
 static int linlondp_gem_dma_dumb_create(struct drm_file *file,
 					struct drm_device *dev,
 					struct drm_mode_create_dumb *args)
 {
-	struct linlondp_dev *mdev = dev->dev_private;
+	struct linlondp_kms_dev *kms = to_kdev(dev);
 	u32 pitch = DIV_ROUND_UP(args->width * args->bpp, 8);
+	u32 bus = kms->hw_mdevs[0]->chip.bus_width;
+	unsigned int i;
+	unsigned int min_pitch;
+	struct drm_gem_dma_object *dma_obj;
+	int ret;
 
-	args->pitch = ALIGN(pitch, mdev->chip.bus_width);
+	for (i = 1; i < kms->n_hw_mdevs; i++)
+		bus = max(bus, kms->hw_mdevs[i]->chip.bus_width);
 
-	return drm_gem_dma_dumb_create_internal(file, dev, args);
+	args->pitch = ALIGN(pitch, bus);
+
+	min_pitch = DIV_ROUND_UP(args->width * args->bpp, 8);
+	if (args->pitch < min_pitch)
+		args->pitch = min_pitch;
+	if (args->size < args->pitch * args->height)
+		args->size = args->pitch * args->height;
+
+	if (kms->n_hw_mdevs < 2)
+		return drm_gem_dma_dumb_create_internal(file, dev, args);
+
+	dma_obj = drm_gem_dma_create(dev, args->size);
+	if (IS_ERR(dma_obj))
+		return PTR_ERR(dma_obj);
+
+	ret = linlondp_cluster_iommu_map_mirror(kms, dma_obj);
+	if (ret) {
+		drm_gem_object_put(&dma_obj->base);
+		return ret;
+	}
+
+	dma_obj->base.funcs = &linlondp_cluster_gem_funcs;
+
+	ret = drm_gem_handle_create(file, &dma_obj->base, &args->handle);
+	drm_gem_object_put(&dma_obj->base);
+	return ret;
 }
+
+static struct drm_gem_object *
+linlondp_gem_prime_import_sg_table(struct drm_device *dev,
+				   struct dma_buf_attachment *attach,
+				   struct sg_table *sgt)
+{
+	struct drm_gem_object *obj;
+	struct linlondp_kms_dev *kms = to_kdev(dev);
+
+	obj = drm_gem_dma_prime_import_sg_table(dev, attach, sgt);
+	if (IS_ERR(obj))
+		return obj;
+
+	if (kms->n_hw_mdevs > 1) {
+		int ret = linlondp_cluster_iommu_map_mirror(
+			kms, to_drm_gem_dma_obj(obj));
+
+		if (ret) {
+			drm_gem_object_put(obj);
+			return ERR_PTR(ret);
+		}
+		obj->funcs = &linlondp_cluster_gem_funcs;
+	}
+	return obj;
+}
+
+struct linlondp_irq_bundle {
+	struct linlondp_kms_dev *kms;
+	struct linlondp_dev *mdev;
+};
 
 static irqreturn_t linlondp_kms_irq_handler(int irq, void *data)
 {
-	struct drm_device *drm = data;
-	struct linlondp_dev *mdev = drm->dev_private;
-	struct linlondp_kms_dev *kms = to_kdev(drm);
+	struct linlondp_irq_bundle *b = data;
+	struct linlondp_dev *mdev = b->mdev;
+	struct linlondp_kms_dev *kms = b->kms;
+	struct drm_device *drm = &kms->base;
 	struct linlondp_events evts;
 	irqreturn_t status;
 	u32 i;
 
-	/* Call into the CHIP to recognize events */
 	memset(&evts, 0, sizeof(evts));
 	status = mdev->funcs->irq_handler(mdev, &evts);
 
-	linlondp_print_events(&evts, drm);
+	linlondp_print_events(&evts, drm, mdev);
 
-	/* Notify the crtc to handle the events */
-	for (i = 0; i < kms->n_crtcs; i++)
+	for (i = 0; i < kms->n_crtcs; i++) {
+		if (kms->crtcs[i].master->mdev != mdev)
+			continue;
 		linlondp_crtc_handle_event(&kms->crtcs[i], &evts);
+	}
 
 	return status;
 }
@@ -65,7 +268,8 @@ static irqreturn_t linlondp_kms_irq_handler(int irq, void *data)
 static struct drm_driver linlondp_kms_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.lastclose = drm_fb_helper_lastclose,
-	DRM_GEM_DMA_DRIVER_OPS_WITH_DUMB_CREATE(linlondp_gem_dma_dumb_create),
+	.dumb_create = linlondp_gem_dma_dumb_create,
+	.gem_prime_import_sg_table = linlondp_gem_prime_import_sg_table,
 	.fops = &linlondp_cma_fops,
 	.name = "linlondp",
 	.desc = "Linlon Display Processor driver",
@@ -259,13 +463,16 @@ static bool linlondp_vrr_match_mode(const struct drm_display_mode *mode1,
 static int linlondp_kms_check(struct drm_device *dev,
 			      struct drm_atomic_state *state)
 {
+	struct linlondp_kms_dev *kms = to_kdev(dev);
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *old_crtc_st, *new_crtc_st;
 	int i, err;
-	struct linlondp_dev *mdev = dev->dev_private;
+	unsigned int ui;
 
-	if (mdev->shutdown)
-		return -ENODEV;
+	for (ui = 0; ui < kms->n_hw_mdevs; ui++) {
+		if (kms->hw_mdevs[ui]->shutdown)
+			return -ENODEV;
+	}
 
 	err = drm_atomic_helper_check_modeset(dev, state);
 	if (err)
@@ -308,13 +515,14 @@ static const struct drm_mode_config_funcs linlondp_mode_config_funcs = {
 };
 
 static void linlondp_kms_mode_config_init(struct linlondp_kms_dev *kms,
-					  struct linlondp_dev *mdev)
+					struct linlondp_dev **mdevs,
+					unsigned int n_mdevs)
 {
 	struct drm_mode_config *config = &kms->base.mode_config;
 
 	drm_mode_config_init(&kms->base);
 
-	linlondp_kms_setup_crtcs(kms, mdev);
+	linlondp_kms_setup_crtcs(kms, mdevs, n_mdevs);
 
 	/* Get value from dev */
 	config->min_width = 0;
@@ -326,31 +534,79 @@ static void linlondp_kms_mode_config_init(struct linlondp_kms_dev *kms,
 	config->helper_private = &linlondp_mode_config_helpers;
 }
 
+static int linlondp_kms_register_irqs(struct linlondp_kms_dev *kms)
+{
+	struct drm_device *drm = &kms->base;
+	struct linlondp_irq_bundle *bundles;
+	unsigned int i;
+	int err;
+
+	bundles = devm_kcalloc(drm->dev, kms->n_hw_mdevs, sizeof(*bundles),
+			       GFP_KERNEL);
+	if (!bundles)
+		return -ENOMEM;
+
+	for (i = 0; i < kms->n_hw_mdevs; i++) {
+		bundles[i].kms = kms;
+		bundles[i].mdev = kms->hw_mdevs[i];
+		err = devm_request_irq(kms->hw_mdevs[i]->dev,
+				       kms->hw_mdevs[i]->irq,
+				       linlondp_kms_irq_handler, IRQF_SHARED,
+				       dev_name(drm->dev), &bundles[i]);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 struct linlondp_kms_dev *linlondp_kms_attach(struct linlondp_dev *mdev)
+{
+	struct linlondp_dev *mdev_arr[1] = { mdev };
+
+	if (enable_render)
+		linlondp_kms_driver.driver_features |= DRIVER_RENDER;
+
+	return linlondp_kms_attach_cluster(mdev->dev, mdev_arr, 1);
+}
+
+struct linlondp_kms_dev *
+linlondp_kms_attach_cluster(struct device *component_master_dev,
+			    struct linlondp_dev **mdevs, unsigned int n_mdevs)
 {
 	struct linlondp_kms_dev *kms;
 	struct drm_device *drm;
+	struct device *drm_alloc_dev = mdevs[0]->dev;
+	unsigned int i;
 	int err;
 
-	if(enable_render)
+	if (!n_mdevs || n_mdevs > LINLONDP_MAX_CLUSTER_DPUS)
+		return ERR_PTR(-EINVAL);
+
+	if (enable_render)
 		linlondp_kms_driver.driver_features |= DRIVER_RENDER;
 
-	kms = devm_drm_dev_alloc(mdev->dev, &linlondp_kms_driver,
+	kms = devm_drm_dev_alloc(drm_alloc_dev, &linlondp_kms_driver,
 				 struct linlondp_kms_dev, base);
 	if (IS_ERR(kms))
 		return kms;
 
 	drm = &kms->base;
 
-	drm->dev_private = mdev;
+	kms->n_hw_mdevs = n_mdevs;
+	for (i = 0; i < n_mdevs; i++)
+		kms->hw_mdevs[i] = mdevs[i];
+	kms->component_master = component_master_dev;
 
-	linlondp_kms_mode_config_init(kms, mdev);
+	drm->dev_private = mdevs[0];
 
-	err = linlondp_kms_add_private_objs(kms, mdev);
+	linlondp_kms_mode_config_init(kms, mdevs, n_mdevs);
+
+	err = linlondp_kms_add_private_objs_multi(kms, mdevs, n_mdevs);
 	if (err)
 		goto cleanup_mode_config;
 
-	err = linlondp_kms_add_planes(kms, mdev);
+	err = linlondp_kms_add_planes_multi(kms, mdevs, n_mdevs);
 	if (err)
 		goto cleanup_mode_config;
 
@@ -358,23 +614,22 @@ struct linlondp_kms_dev *linlondp_kms_attach(struct linlondp_dev *mdev)
 	if (err)
 		goto cleanup_mode_config;
 
-	err = linlondp_kms_add_crtcs(kms, mdev);
+	err = linlondp_kms_add_crtcs(kms, mdevs[0]);
 	if (err)
 		goto cleanup_mode_config;
 
-	err = linlondp_kms_add_wb_connectors(kms, mdev);
+	err = linlondp_kms_add_wb_connectors(kms, mdevs[0]);
 	if (err)
 		goto cleanup_mode_config;
 
 #if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
-	err = component_bind_all(mdev->dev, kms);
+	err = component_bind_all(kms->component_master, kms);
 	if (err)
 		goto cleanup_mode_config;
 
 	drm_mode_config_reset(drm);
 #endif
-	err = devm_request_irq(drm->dev, mdev->irq, linlondp_kms_irq_handler,
-			       IRQF_SHARED, dev_name(drm->dev), drm);
+	err = linlondp_kms_register_irqs(kms);
 	if (err)
 		goto free_component_binding;
 
@@ -390,7 +645,7 @@ struct linlondp_kms_dev *linlondp_kms_attach(struct linlondp_dev *mdev)
 free_interrupts:
 	drm_kms_helper_poll_fini(drm);
 free_component_binding:
-	component_unbind_all(mdev->dev, drm);
+	component_unbind_all(kms->component_master, drm);
 cleanup_mode_config:
 	drm_mode_config_cleanup(drm);
 	linlondp_kms_cleanup_private_objs(kms);
@@ -401,12 +656,11 @@ cleanup_mode_config:
 void linlondp_kms_detach(struct linlondp_kms_dev *kms)
 {
 	struct drm_device *drm = &kms->base;
-	struct linlondp_dev *mdev = drm->dev_private;
 
 	drm_dev_unregister(drm);
 	drm_kms_helper_poll_fini(drm);
 	drm_atomic_helper_shutdown(drm);
-	component_unbind_all(mdev->dev, drm);
+	component_unbind_all(kms->component_master, drm);
 	drm_mode_config_cleanup(drm);
 	linlondp_kms_cleanup_private_objs(kms);
 	drm->dev_private = NULL;

@@ -6,6 +6,7 @@ ccflags-y := \
 
 linlon-dp-y := \
     linlondp_drv.o \
+    linlondp_cluster.o \
     linlondp_dev.o \
     linlondp_format_caps.o \
     linlondp_color_mgmt.o \
