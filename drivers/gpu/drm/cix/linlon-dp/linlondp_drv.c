@@ -6,6 +6,7 @@
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/acpi.h>
 #include <linux/platform_device.h>
 #include <linux/component.h>
 #include <linux/pm_runtime.h>
@@ -16,6 +17,32 @@
 #include <drm/drm_fbdev_generic.h>
 #include "linlondp_dev.h"
 #include "linlondp_kms.h"
+
+#if IS_ENABLED(CONFIG_ACPI)
+#include <acpi/acpi_bus.h>
+
+/*
+ * ACPI cluster (CIXH50C0): each DPU (CIXH5010) must not register its own DRM
+ * card — same as DT "cix,linlon-dpu-slave". Firmware may set _DSD
+ * cix,linlon-dpu-slave; if not, treat DPU as slave when its ACPI parent is the
+ * cluster device (AML nests DPU under cluster).
+ */
+static bool linlondp_acpi_is_cluster_dpu_slave(struct device *dev)
+{
+	struct acpi_device *adev, *parent;
+
+	if (!has_acpi_companion(dev))
+		return false;
+	adev = ACPI_COMPANION(dev);
+	parent = acpi_dev_parent(adev);
+	return parent && acpi_dev_hid_uid_match(parent, "CIXH50C0", NULL);
+}
+#else
+static bool linlondp_acpi_is_cluster_dpu_slave(struct device *dev)
+{
+	return false;
+}
+#endif
 
 bool enable_fb = true;
 module_param_named(enable_fb, enable_fb, bool, 0644);
@@ -193,6 +220,23 @@ int linlondp_dpu_add_graph_slaves(struct device *master,
 	struct device_node *np = dpu_dev->of_node;
 	struct device_node *of_child;
 
+	if (has_acpi_companion(dpu_dev) && dev_fwnode(dpu_dev)) {
+		struct fwnode_handle *acpi_child;
+		const char *tmp_name = NULL;
+
+		fwnode_for_each_child_node(dev_fwnode(dpu_dev), acpi_child) {
+			tmp_name = acpi_child->ops->get_name(acpi_child);
+			if (strncmp(tmp_name, "pipeline", 8))
+				continue;
+
+			linlondp_add_acpi_slave(master, match, acpi_child,
+						LINLONDP_OF_PORT_OUTPUT, 0);
+			linlondp_add_acpi_slave(master, match, acpi_child,
+						LINLONDP_OF_PORT_OUTPUT, 1);
+		}
+		return 0;
+	}
+
 	if (!np)
 		return 0;
 
@@ -238,7 +282,8 @@ static int linlondp_platform_probe(struct platform_device *pdev)
 	struct device_node *of_child;
 	const char *tmp_name = NULL;
 
-	if (device_property_read_bool(dev, "cix,linlon-dpu-slave"))
+	if (device_property_read_bool(dev, "cix,linlon-dpu-slave") ||
+	    linlondp_acpi_is_cluster_dpu_slave(dev))
 		return linlondp_dpu_slave_probe(pdev);
 
 	pr_info("%s enter. dev.name=%s\n", __func__, dev_name(dev));
@@ -283,7 +328,8 @@ static int linlondp_platform_probe(struct platform_device *pdev)
 
 static int linlondp_platform_remove(struct platform_device *pdev)
 {
-	if (device_property_read_bool(&pdev->dev, "cix,linlon-dpu-slave"))
+	if (device_property_read_bool(&pdev->dev, "cix,linlon-dpu-slave") ||
+	    linlondp_acpi_is_cluster_dpu_slave(&pdev->dev))
 		return linlondp_dpu_slave_remove(pdev);
 #if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 	component_master_del(&pdev->dev, &linlondp_master_ops);

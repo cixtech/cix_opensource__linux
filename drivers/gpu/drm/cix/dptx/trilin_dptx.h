@@ -198,6 +198,12 @@ union phy_configure_opts;
 struct trilin_dpsub {
 	struct drm_device *drm[LINLON_KMS_SIZE];
 	struct device *dev;
+	/*
+	 * Set in trilin_dptx_cix_bind() from ACPI graph / DT before trilin_dp_drm_init().
+	 * The real DRM encoder is dp->encoder.base, not cix_dptx->encoder; this passes
+	 * possible_crtcs into drm_encoder_init. 0 = unset (use OF or SST fallback).
+	 */
+	u32 preset_possible_crtcs;
 	struct clk *apb_clk;
 	struct clk *vid_clk0;
 	struct clk *vid_clk1;

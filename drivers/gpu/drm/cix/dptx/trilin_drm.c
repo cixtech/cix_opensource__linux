@@ -1196,7 +1196,9 @@ int trilin_dp_drm_init(struct trilin_dpsub *dpsub)
 	conn->dp = dp;
 	conn->type = TRILIN_OUTPUT_DP;
 	/* Create the DRM encoder and connector. */
-	if (dp->dev && dp->dev->of_node)
+	if (dpsub->preset_possible_crtcs)
+		encoder->possible_crtcs = dpsub->preset_possible_crtcs;
+	else if (dp->dev && dp->dev->of_node)
 		encoder->possible_crtcs = drm_of_find_possible_crtcs(dp->drm[0],
 								   dp->dev->of_node);
 	if (!encoder->possible_crtcs)

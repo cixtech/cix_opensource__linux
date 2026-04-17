@@ -43,6 +43,7 @@
 #include "trilin_phy.h"
 #include "cix_edp_panel.h"
 
+
 struct trilin_dptx_pdata {
 	int eDP;
 };
@@ -82,13 +83,9 @@ static uint32_t drm_acpi_crtc_port_mask(struct drm_device *dev,
 {
 	unsigned int index = 0;
 	struct drm_crtc *tmp;
-
 	drm_for_each_crtc(tmp, dev) {
-		if ((struct fwnode_handle *)tmp->port == port) {
-			pr_info("cix_virtual.drm_acpi_crtc_port_mask, port=%s\n",
-				port->ops->get_name(port));
+		if ((struct fwnode_handle *)tmp->port == port)
 			return 1 << index;
-		}
 
 		index++;
 	}
@@ -114,6 +111,7 @@ static uint32_t drm_acpi_find_possible_crtcs(struct drm_device *dev,
 		fwnode_handle_put(remote_port);
 	}
 
+
 	return possible_crtcs;
 }
 
@@ -130,6 +128,9 @@ static int trilin_dptx_cix_bind(struct device *comp, struct device *master,
 	int ret = 0;
 
 	cix_dptx->dev = comp;
+	dpsub = &cix_dptx->dpsub;
+	dpsub->dev = comp;
+	dpsub->preset_possible_crtcs = 0;
 
 	encoder = &cix_dptx->encoder;
 	if (has_acpi_companion(comp)) {
@@ -140,8 +141,12 @@ static int trilin_dptx_cix_bind(struct device *comp, struct device *master,
 		encoder->possible_crtcs = drm_of_find_possible_crtcs(drm, np);
 	}
 
+	dpsub->preset_possible_crtcs = encoder->possible_crtcs;
+
+
 	if (!encoder->possible_crtcs)
 		return -EPROBE_DEFER;
+
 
 	if (!np)
 		return -ENODEV;
@@ -159,9 +164,6 @@ static int trilin_dptx_cix_bind(struct device *comp, struct device *master,
 
 	if (unlikely(!match))
 		return -ENODEV;
-
-	dpsub = &cix_dptx->dpsub;
-	dpsub->dev = comp;
 
 	ret = trilin_dp_probe(dpsub, drm);
 	if (ret)
