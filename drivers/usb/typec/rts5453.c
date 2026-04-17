@@ -484,7 +484,7 @@ static int rts5453h_init_ports(struct rts5453h *typec)
 
 		ret = rts5453h_typec_get_switch_handles(typec, fwnode, dev);
 		if (ret) {
-			dev_err(dev, "No switch control for port \n");
+			dev_err_probe(dev, ret, "No switch control for port \n");
 			goto unregister_ports;
 		}
 	}
