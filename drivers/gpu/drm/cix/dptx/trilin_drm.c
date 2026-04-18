@@ -1199,14 +1199,14 @@ int trilin_dp_drm_init(struct trilin_dpsub *dpsub)
 	if (dpsub->preset_possible_crtcs)
 		encoder->possible_crtcs = dpsub->preset_possible_crtcs;
 	else if (dp->dev && dp->dev->of_node)
-		encoder->possible_crtcs = drm_of_find_possible_crtcs(dp->drm[0],
+		encoder->possible_crtcs = drm_of_find_possible_crtcs(dp->drm,
 								   dp->dev->of_node);
 	if (!encoder->possible_crtcs)
 		encoder->possible_crtcs = TRILIN_DPTX_POSSIBLE_CRTCS_SST;
 	DRM_INFO("DP encoder possible_crtcs=0x%x (from %s)\n",
 		 encoder->possible_crtcs,
 		 (dp->dev && dp->dev->of_node) ? "DT" : "fallback");
-	drm_encoder_init(dp->drm[0], encoder, &trilin_dp_enc_funcs,
+	drm_encoder_init(dp->drm, encoder, &trilin_dp_enc_funcs,
 			 DRM_MODE_ENCODER_TMDS, NULL);
 
 	drm_encoder_helper_add(encoder, &trilin_dp_encoder_helper_funcs);

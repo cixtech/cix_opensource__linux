@@ -35,7 +35,6 @@
 #include <asm/types.h>
 #include <linux/component.h>
 #include <linux/of_device.h>
-#include <linux/module.h>
 
 #include "trilin_dptx_reg.h"
 #include "trilin_host_tmr.h"
@@ -199,11 +198,6 @@ static const struct component_ops trilin_dptx_cix_ops = {
 	.unbind = trilin_dptx_cix_unbind,
 };
 
-struct linlondp_drv {
-	void *mdev;
-	void *kms;
-};
-
 static int trilin_dptx_cix_probe(struct platform_device *pdev)
 {
 	struct trilin_dptx_cix_dev *dptx_dev;
@@ -214,121 +208,12 @@ static int trilin_dptx_cix_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, dptx_dev);
 
-#if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 	return component_add(&pdev->dev, &trilin_dptx_cix_ops);
-#else
-	struct device_node *ports_node, *port_node;
-	int i = 0, ret = 0, j = 0;
-	struct device_node *remote_node;
-	struct platform_device *dpu_pdev;
-	struct device *master_dpu_dev_0 = NULL;
-	struct device *master_dpu_dev_1 = NULL;
-	struct drm_device *drm;
-
-	ports_node = of_get_child_by_name(pdev->dev.of_node, "ports");
-
-	if (!ports_node) {
-		dev_err(&pdev->dev, "Device A has no 'ports' node");
-		return -ENOMEM;
-	}
-
-	for_each_child_of_node(ports_node, port_node) {
-		struct device_node *ep_node = of_get_next_child(port_node, NULL);
-
-		if (!ep_node)
-			continue;
-
-		struct device_node *remote_ep = of_parse_phandle(ep_node, "remote-endpoint", 0);
-
-		of_node_put(ep_node);
-		if (!remote_ep)
-			continue;
-
-		struct device_node *port_b = of_get_parent(remote_ep);
-
-		if (!port_b) {
-			dev_err(&pdev->dev, "No port parent for endpoint");
-			of_node_put(remote_ep);
-			continue;
-		}
-
-		struct device_node *pipeline_b = of_get_parent(port_b);
-
-		of_node_put(port_b);
-		if (!pipeline_b) {
-			dev_err(&pdev->dev, "No pipeline parent for port");
-			of_node_put(remote_ep);
-			continue;
-		}
-
-		struct device_node *dev_b_node = of_get_parent(pipeline_b);
-
-		of_node_put(pipeline_b);
-		if (!dev_b_node) {
-			dev_err(&pdev->dev, "No device_b node for pipeline");
-			of_node_put(remote_ep);
-			continue;
-		}
-
-		dev_dbg(&pdev->dev, "Found Device : %s", dev_b_node->full_name);
-
-		dpu_pdev = of_find_device_by_node(dev_b_node);
-		of_node_put(dev_b_node);
-		of_node_put(remote_ep);
-
-		struct linlondp_drv *drv_data = platform_get_drvdata(dpu_pdev);
-
-		while (!drv_data) {
-			msleep(20);
-			if (j++ > 100) {
-				dev_err(&pdev->dev, "Timeout: Wait too long (%d) for linlondp ko ready", 20*j);
-				return -ETIMEDOUT;
-			}
-			drv_data = platform_get_drvdata(dpu_pdev);
-		}
-
-		dev_dbg(&pdev->dev, "Wait %d ms for drm data ready.", 20*j);
-
-		if (master_dpu_dev_0 == &dpu_pdev->dev
-			|| master_dpu_dev_1 == &dpu_pdev->dev) {
-			dev_dbg(&pdev->dev, "Ignore the second master dpu");
-			continue;
-		}
-
-		if (i == 0)
-			master_dpu_dev_0 = &dpu_pdev->dev;
-		else if (i == 1)
-			master_dpu_dev_1 = &dpu_pdev->dev;
-
-		drm = drv_data->kms;
-		dptx_dev->dpsub.drm[i++] = drm;
-	}
-
-	of_node_put(ports_node);
-
-	ret = trilin_dptx_cix_bind(&pdev->dev, master_dpu_dev_0, dptx_dev->dpsub.drm[0]);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "trilin_dptx_cix_bind failed...");
-		return ret;
-	}
-
-	for (j = 0; j < i; j++) {
-		drm_mode_config_reset(dptx_dev->dpsub.drm[j]);
-		drm_kms_helper_poll_init(dptx_dev->dpsub.drm[j]);
-		ret = drm_dev_register(dptx_dev->dpsub.drm[j], 0);
-		dev_dbg(&pdev->dev, "register drm%d %s", j, !ret ? "success" : "failed");
-	}
-	return 0;
-#endif
 }
 
 static int trilin_dptx_cix_remove(struct platform_device *pdev)
 {
-#if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 	component_del(&pdev->dev, &trilin_dptx_cix_ops);
-#else
-	trilin_dptx_cix_unbind(&pdev->dev, NULL, NULL);
-#endif
 	return 0;
 }
 
@@ -435,7 +320,4 @@ module_exit(trilin_dp_driver_exit);
 MODULE_AUTHOR("Fei Mao <fei.mao@cixtech.com>");
 MODULE_DESCRIPTION("Cix Platforms DP Driver");
 MODULE_LICENSE("GPL v2");
-#if IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
-MODULE_SOFTDEP("pre: linlon_dp");
-#endif
 MODULE_ALIAS("platform:trilin-dptx-cix");

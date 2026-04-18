@@ -175,10 +175,10 @@ union phy_configure_opts;
 #define DPTX_MEM_DP_PHY_IDX 2
 #define DPTX_MEM_DP_RCSU_IDX 3
 
-/* MST define */
-#define TRILIN_DPTX_POSSIBLE_CRTCS_MST 0x3
+/* MST: possible_crtcs for virtual encoders is built at runtime from CRTCs,
+ * num_crtc, and max_streams fallback — see trilin_drm_mst_encoder_init().
+ */
 #define TRILIN_DPTX_POSSIBLE_CRTCS_SST 0x1
-#define LINLON_KMS_SIZE 2
 
 /*Reserved Register accese CMD*/
 #define CIX_SIP_DP_GOP_CTRL (0xc200000f)
@@ -196,7 +196,7 @@ union phy_configure_opts;
  * @dma_align: DMA alignment constraint (must be a power of 2)
  */
 struct trilin_dpsub {
-	struct drm_device *drm[LINLON_KMS_SIZE];
+	struct drm_device *drm;
 	struct device *dev;
 	/*
 	 * Set in trilin_dptx_cix_bind() from ACPI graph / DT before trilin_dp_drm_init().
@@ -432,7 +432,7 @@ struct trilin_dp {
 	struct drm_panel *edp_panel;
 	struct device *dev;
 	struct trilin_dpsub *dpsub;
-	struct drm_device **drm;
+	struct drm_device *drm;
 	void __iomem *dp_iomem;
 	void __iomem *phy_iomem;
 	void __iomem *rcsu_iomem;
@@ -510,7 +510,7 @@ struct trilin_dp {
 #define DP_DEBUG(fmt, ...)										\
 	do {                                                              \
 		if (DRM_UT_KMS)                                           \
-			drm_dbg_atomic(dp->drm[0], ""fmt, ##__VA_ARGS__);    \
+			drm_dbg_atomic(dp->drm, ""fmt, ##__VA_ARGS__);    \
 		else                                                      \
 			dev_dbg(dp->dev, "[drm:%s][debug]" fmt, __func__, \
 				##__VA_ARGS__);                           \
@@ -528,7 +528,7 @@ struct trilin_dp {
 #define DP_MST_DEBUG(fmt, ...)									\
 	do {                                                              \
 		if (DRM_UT_KMS)                                           \
-			drm_dbg_atomic(dp->drm[0], "MST:" fmt, ##__VA_ARGS__);    \
+			drm_dbg_atomic(dp->drm, "MST:" fmt, ##__VA_ARGS__);    \
 		else                                                      \
 			dev_dbg(dp->dev, "[MST:%s][debug]" fmt, __func__, \
 				##__VA_ARGS__);                           \

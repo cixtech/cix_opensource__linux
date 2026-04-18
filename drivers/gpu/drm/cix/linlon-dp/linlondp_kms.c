@@ -622,24 +622,20 @@ linlondp_kms_attach_cluster(struct device *component_master_dev,
 	if (err)
 		goto cleanup_mode_config;
 
-#if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 	err = component_bind_all(kms->component_master, kms);
 	if (err)
 		goto cleanup_mode_config;
 
 	drm_mode_config_reset(drm);
-#endif
 	err = linlondp_kms_register_irqs(kms);
 	if (err)
 		goto free_component_binding;
 
-#if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 	drm_kms_helper_poll_init(drm);
 
 	err = drm_dev_register(drm, 0);
 	if (err)
 		goto free_interrupts;
-#endif
 	return kms;
 
 free_interrupts:

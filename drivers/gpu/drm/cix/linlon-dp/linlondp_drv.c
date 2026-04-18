@@ -288,7 +288,6 @@ static int linlondp_platform_probe(struct platform_device *pdev)
 
 	pr_info("%s enter. dev.name=%s\n", __func__, dev_name(dev));
 	pr_info("linlondp enable fb is %d", enable_fb);
-#if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 	if (has_acpi_companion(dev)) {
 		pr_info("%s via acpi.\n", __func__);
 		fwnode_for_each_child_node(dev->fwnode, acpi_child) {
@@ -321,9 +320,6 @@ static int linlondp_platform_probe(struct platform_device *pdev)
 	pr_info("%s end. match=%p\n", __func__, match);
 	return component_master_add_with_match(dev, &linlondp_master_ops,
 					       match);
-#else
-	return linlondp_bind(dev);
-#endif
 }
 
 static int linlondp_platform_remove(struct platform_device *pdev)
@@ -331,11 +327,7 @@ static int linlondp_platform_remove(struct platform_device *pdev)
 	if (device_property_read_bool(&pdev->dev, "cix,linlon-dpu-slave") ||
 	    linlondp_acpi_is_cluster_dpu_slave(&pdev->dev))
 		return linlondp_dpu_slave_remove(pdev);
-#if !IS_ENABLED(CONFIG_DRM_CIX_COMPONENT_BIND_BYPASSED)
 	component_master_del(&pdev->dev, &linlondp_master_ops);
-#else
-	linlondp_unbind(&pdev->dev);
-#endif
 	return 0;
 }
 

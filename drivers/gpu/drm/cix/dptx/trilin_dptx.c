@@ -901,7 +901,7 @@ static int trilin_dp_aux_register(struct trilin_dp *dp)
 	DP_DEBUG("enter\n");
 	dp->aux.name = "Trilin DP AUX";
 	dp->aux.dev = dp->dev;
-	dp->aux.drm_dev = dp->drm[0];
+	dp->aux.drm_dev = dp->drm;
 	dp->aux.transfer = trilin_dp_aux_transfer;
 	return drm_dp_aux_register(&dp->aux);
 }
@@ -2693,8 +2693,8 @@ static void trilin_dp_hpd_event_work_func(struct work_struct *work)
 	else
 		DP_INFO("dp hpd event received: Unplugged\n");
 
-	if (dp->drm[0])
-		drm_helper_hpd_irq_event(dp->drm[0]);
+	if (dp->drm)
+		drm_helper_hpd_irq_event(dp->drm);
 
 	DP_DEBUG("dp audio plugin status = %d\n", connected);
 	dptx_audio_handle_plugged_change(dp_audio, connected);
@@ -2838,7 +2838,6 @@ unlock:
 int trilin_dp_pm_prepare(struct trilin_dp *dp)
 {
 	struct trilin_dpsub *dpsub = dp->dpsub;
-	int i;
 
 	/*
 	 * Stop KMS connector polling before DP host teardown so output_poll_execute
@@ -2846,16 +2845,8 @@ int trilin_dp_pm_prepare(struct trilin_dp *dp)
 	 * independent of dpm_list; drm_mode_config_helper_suspend() will call
 	 * poll_disable again (idempotent).
 	 */
-	if (dpsub) {
-		for (i = 0; i < LINLON_KMS_SIZE; i++) {
-			struct drm_device *drm = dpsub->drm[i];
-
-			if (!drm)
-				break;
-			if (drm->mode_config.poll_enabled)
-				drm_kms_helper_poll_disable(drm);
-		}
-	}
+	if (dpsub && dpsub->drm && dpsub->drm->mode_config.poll_enabled)
+		drm_kms_helper_poll_disable(dpsub->drm);
 
 	mutex_lock(&dp->session_lock);
 	DP_DEBUG("enter");
@@ -2882,7 +2873,6 @@ int trilin_dp_pm_prepare(struct trilin_dp *dp)
 int trilin_dp_pm_complete(struct trilin_dp *dp)
 {
 	struct trilin_dpsub *dpsub = dp->dpsub;
-	int i;
 
 	mutex_lock(&dp->session_lock);
 	DP_DEBUG("enter");
@@ -2898,16 +2888,8 @@ int trilin_dp_pm_complete(struct trilin_dp *dp)
 	/* Re-enable polling after IRQ and MST are back; redundant if resume already
 	 * called drm_kms_helper_poll_enable() (idempotent).
 	 */
-	if (dpsub) {
-		for (i = 0; i < LINLON_KMS_SIZE; i++) {
-			struct drm_device *drm = dpsub->drm[i];
-
-			if (!drm)
-				break;
-			if (drm->mode_config.poll_enabled)
-				drm_kms_helper_poll_enable(drm);
-		}
-	}
+	if (dpsub && dpsub->drm && dpsub->drm->mode_config.poll_enabled)
+		drm_kms_helper_poll_enable(dpsub->drm);
 end:
 	mutex_unlock(&dp->session_lock);
 	return 0;
@@ -3328,12 +3310,8 @@ int trilin_dp_probe(struct trilin_dpsub *dpsub, struct drm_device *drm)
 	dp->dpsub = dpsub;
 	dp->status = connector_status_unknown;
 
-	if (!dpsub->drm[0]) {
-		dpsub->drm[0] = drm;
-	}
-
-	dp->drm = dpsub->drm; //DP_DEBUG needs dp->drm[0]
-
+	dpsub->drm = drm;
+	dp->drm = drm;
 	dp->num_lanes = TRILIN_DPTX_MAX_LANES;
 	dp->max_rate = DP_HIGH_BIT_RATE3;
 	dp->max_streams = 2;
