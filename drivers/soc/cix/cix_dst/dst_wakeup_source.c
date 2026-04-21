@@ -19,6 +19,7 @@ struct wakeup_source_dat {
 
 struct wakeup_source_dat g_wakeup_src_dat;
 struct delayed_work g_delay_wq;
+static void ipc_resume_callback(void);
 
 void wakeup_src_rx_callback(char *inbuf, size_t len)
 {
@@ -32,7 +33,7 @@ static int wakeup_src_send_msg(void)
 
 static void wakeup_src_work(struct work_struct *work)
 {
-	pr_info("%s\n", __func__);
+	pr_info("%s: jiffies=%lu\n", __func__, jiffies);
 	if (wakeup_src_send_msg() >= 0) {
 		pr_info("wakeup_src_resume: 0x%x, 0x%x, 0x%x, 0x%x, 0x%x, 0x%x\n",
 			g_wakeup_src_dat.plat_id, g_wakeup_src_dat.wakeup_src,
@@ -42,9 +43,17 @@ static void wakeup_src_work(struct work_struct *work)
 			g_wakeup_src_dat.wakeup_sub_src[3]);
 	}
 }
+
+
 static void wakeup_src_resume(void)
 {
-	schedule_delayed_work(&g_delay_wq, msecs_to_jiffies(WAKEUP_WORK_DELAY_MS));
+	cancel_delayed_work_sync(&g_delay_wq);
+//	schedule_delayed_work(&g_delay_wq, msecs_to_jiffies(WAKEUP_WORK_DELAY_MS));
+}
+static void ipc_resume_callback(void)
+{
+	cancel_delayed_work_sync(&g_delay_wq);
+	wakeup_src_send_msg();
 }
 static struct syscore_ops wakeup_src_syscore_ops = {
 	.suspend = NULL,
@@ -58,6 +67,7 @@ static int wakeup_src_init(void)
 	if (ret) {
 		pr_err("register wakeup src rx callback failed\n");
 	}
+	cix_ap2se_register_resume_cbk(ipc_resume_callback);
 	register_syscore_ops(&wakeup_src_syscore_ops);
 	INIT_DELAYED_WORK(&g_delay_wq, wakeup_src_work);
 	return ret;

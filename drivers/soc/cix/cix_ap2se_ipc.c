@@ -32,6 +32,7 @@ typedef struct _services_cb_group {
 static services_cb_group services_cbs[MAX_SERVICES_NUM];
 
 static struct cix_ap2se_ipc_dev g_ap2se_ipc_dev;
+static ipc_resume_callback_t g_ipc_resume_cbk;
 
 static int get_rx_callback(uint32_t cmd_id, ipc_rx_callback_t *cb)
 {
@@ -97,6 +98,12 @@ int cix_ap2se_register_rx_cbk(uint32_t cmd_id, ipc_rx_callback_t cbk)
 }
 EXPORT_SYMBOL_GPL(cix_ap2se_register_rx_cbk);
 
+int cix_ap2se_register_resume_cbk(ipc_resume_callback_t cbk)
+{
+	g_ipc_resume_cbk = cbk;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(cix_ap2se_register_resume_cbk);
 static void cix_ap2se_ipc_rx_callback(struct mbox_client *cl, void *message)
 {
 #if CIX_AP2SE_IPC_DEBUG
@@ -105,7 +112,6 @@ static void cix_ap2se_ipc_rx_callback(struct mbox_client *cl, void *message)
 	struct mbox_msg_t *msg = (struct mbox_msg_t *)message;
 	struct cix_ap2se_ipc_dev *mdev = dev_get_drvdata(cl->dev);
 	ipc_rx_callback_t fun_cb;
-
 	if (get_rx_callback(msg->cmd_id, &fun_cb)) {
 		dev_err(cl->dev, "unknown cmd_id: %d\n", msg->cmd_id);
 		return;
@@ -133,7 +139,7 @@ int cix_ap2se_ipc_send(uint32_t cmd_id, char *data, size_t len,
 	uint32_t *msg;
 
 	if (!mdev->init_status) {
-		pr_err("%s, ipc not init\n", __func__);
+		pr_err("%s, ipc not init, cmd_id=0x%x, jiffies=%lu\n", __func__, cmd_id, jiffies);
 		return -EIO;
 	}
 
@@ -151,7 +157,7 @@ int cix_ap2se_ipc_send(uint32_t cmd_id, char *data, size_t len,
 	msg[1] = cmd_id;
 	memcpy(msg + MBOX_HEADER_NUM, data, len);
 
-	if (!in_irq())
+		if (!in_irq())
 		mutex_lock(&mdev->mbox_lock);
 	if (in_irq())
 		need_reply = 0;
@@ -168,8 +174,8 @@ int cix_ap2se_ipc_send(uint32_t cmd_id, char *data, size_t len,
 		if (!wait_for_completion_timeout(
 			    &mdev->rsp_comp,
 			    msecs_to_jiffies(MBOX_SEND_TIMEOUT * 2))) {
-			pr_err("%s,%d: wait for completion timeout\n", __func__,
-			       __LINE__);
+			pr_err("%s,%d: wait for completion timeout, jiffies=%lu\n", __func__,
+			       __LINE__, jiffies);
 			ret = -ETIMEDOUT;
 		}
 	}
@@ -255,11 +261,9 @@ static int cix_ap2se_ipc_remove(struct platform_device *pdev)
 static int cix_ap2se_ipc_suspend(struct device *dev)
 {
 	struct cix_ap2se_ipc_dev *mdev = dev_get_drvdata(dev);
-
 	dev_dbg(dev, "cix_ap2se_ipc suspend %d\n", mdev->init_status);
 	if (mdev->init_status)
 		cix_ap2se_ipc_free_mbox(mdev);
-
 	return 0;
 }
 
@@ -267,7 +271,6 @@ static int cix_ap2se_ipc_resume(struct device *dev)
 {
 	struct cix_ap2se_ipc_dev *mdev = dev_get_drvdata(dev);
 	int ret;
-
 	dev_dbg(dev, "cix_ap2se_ipc resume %d\n", mdev->init_status);
 	if (mdev->init_status) {
 		pr_info("cix_ap2se_ipc already initialized\n");
@@ -280,6 +283,9 @@ static int cix_ap2se_ipc_resume(struct device *dev)
 		return ret;
 	}
 	mdev->init_status = 1;
+	if (g_ipc_resume_cbk) {
+			g_ipc_resume_cbk();
+	}
 	return 0;
 }
 

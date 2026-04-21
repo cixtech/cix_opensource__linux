@@ -33,8 +33,10 @@ struct mbox_msg_t {
 };
 
 typedef void (*ipc_rx_callback_t)(char *inbuf, size_t len);
+typedef void (*ipc_resume_callback_t)(void);
 
 int cix_ap2se_register_rx_cbk(uint32_t cmd_id, ipc_rx_callback_t cbk);
+int cix_ap2se_register_resume_cbk(ipc_resume_callback_t cbk);
 int cix_ap2se_ipc_send(uint32_t cmd_id, char *data, size_t len, bool need_reply);
 
 #endif
