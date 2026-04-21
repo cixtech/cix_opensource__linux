@@ -2192,28 +2192,58 @@ static int __init sky1_pcie_linkup_delay(char *str)
 }
 __setup("pcie_linkup_delay=", sky1_pcie_linkup_delay);
 
+static void sky1_pcie_log_linkup_debug(struct sky1_pcie *pcie, u32 ltssm,
+				       bool link_complete)
+{
+	u16 lnksta = 0;
+	u16 cap;
+	u16 gen = 0;
+	u16 lanes = 0;
+
+	cap = cdns_pcie_find_capability(pcie->reg_base, PCI_CAP_ID_EXP);
+	if (cap) {
+		lnksta = readw(pcie->reg_base + cap + PCI_EXP_LNKSTA);
+		gen = lnksta & PCI_EXP_LNKSTA_CLS;
+		lanes = (lnksta & PCI_EXP_LNKSTA_NLW) >>
+			PCI_EXP_LNKSTA_NLW_SHIFT;
+	}
+
+	dev_info_ratelimited(
+		pcie->dev,
+		"linkup information: training=%s ltssm=%u(%s) negotiated=x%u Gen%u target=x%u Gen%u\n",
+		link_complete ? "done" : "not-complete", ltssm,
+		sky1_ltssm_sts_name(ltssm), lanes, gen, pcie->num_lanes,
+		pcie->link_speed);
+}
+
 bool sky1_pcie_link_up(struct cdns_pcie *cdns_pcie)
 {
 	u32 val;
+	u32 ltssm;
+	u32 complete;
 	void __iomem *status_addr;
 	struct sky1_pcie *pcie;
 
 	pcie = dev_get_drvdata(cdns_pcie->dev);
 	status_addr = pcie->status_base + STATUS_REG(0);
 	val = sky1_pcie_get_bits32(status_addr, ~0);
-	val = (val >> PCIE_LTSSM_STATUS_SHIFT) & 0x3f;
-	dev_dbg(cdns_pcie->dev, "sky1 link status is 6'd%d %s\n", val,
-		sky1_ltssm_sts_name(val));
+	ltssm = (val >> PCIE_LTSSM_STATUS_SHIFT) & 0x3f;
 
 	val = cdns_pcie_readl(cdns_pcie, IP_REG_I_DBG_STS_0);
+	complete = val & LINK_COMPLETE;
+	if (complete) {
+		sky1_pcie_log_linkup_debug(pcie, ltssm, true);
+	}
+
 	/*
 	 * As per PCIe r6.0, sec 6.6.1, a Downstream Port that supports Link
 	 * speeds greater than 5.0 GT/s, software must wait a minimum of 100 ms
 	 * after Link training completes before sending a Configuration Request.
 	 */
-	if ((val & LINK_COMPLETE) && (pcie->link_speed > 2))
+	if (complete && (pcie->link_speed > 2))
 		msleep(linkup_delay ?: PCIE_RESET_CONFIG_WAIT_MS);
-	return val & LINK_COMPLETE;
+
+	return (bool)complete;
 }
 
 static void sky1_pcie_pme_turn_off(struct sky1_pcie *pcie)

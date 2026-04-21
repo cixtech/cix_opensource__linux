@@ -14,6 +14,157 @@
 
 #define LINK_RETRAIN_TIMEOUT HZ
 
+/* LTSSM FIFO registers — chip bug workaround */
+#define CDNS_PCIE_LTSSM_FIFO_TRIG  (CDNS_PCIE_IP_REG_BANK_BASE + 0x760)
+#define CDNS_PCIE_LTSSM_FIFO_DATA  (CDNS_PCIE_IP_REG_BANK_BASE + 0x764)
+#define CDNS_PCIE_LTSSM_FIFO_DEPTH 64
+
+static bool ltssm_fifo_debug;
+static int __init ltssm_fifo_debug_setup(char *str)
+{
+	ltssm_fifo_debug = true;
+	return 1;
+}
+early_param("ltssm_fifo_debug", ltssm_fifo_debug_setup);
+
+static const char * const cdns_ltssm_names[] = {
+	[0x00] = "DETECT_QUIET",
+	[0x01] = "DETECT_QUIET_ENTRY",
+	[0x02] = "DETECT_ACTIVE",
+	[0x03] = "DETECT_ACTIVE_1",
+	[0x04] = "DETECT_ACTIVE_2",
+	[0x05] = "DETECT_ACTIVE_3",
+	[0x06] = "RCVR_DETECTED_ST",
+	[0x07] = "RCVR_DETECTED_1",
+	[0x08] = "POLLING_ACTIVE",
+	[0x09] = "POLLING_ACTIVE_1",
+	[0x0a] = "POLLING_ACTIVE_2",
+	[0x0b] = "POLLING_ACTIVE_3",
+	[0x0c] = "POLLING_COMPLIANCE",
+	[0x0d] = "POLLING_COMPLIANCE_1",
+	[0x0e] = "POLLING_CONFIG",
+	[0x0f] = "POLLING_CONFIG_1",
+	[0x10] = "POLLING_CONFIG_2",
+	[0x11] = "CONFIG_LW_START_RC",
+	[0x12] = "CONFIG_LW_START_RC_1",
+	[0x13] = "CONFIG_LW_START_RC_2",
+	[0x14] = "CONFIG_ACC_RC",
+	[0x15] = "CONFIG_LANENUM_WAIT_RC",
+	[0x16] = "CONFIG_LANENUM_WAIT_RC_1",
+	[0x17] = "CONFIG_LANENUM_ACC_RC",
+	[0x18] = "CONFIG_LW_START_EP",
+	[0x19] = "CONFIG_LW_START_EP_1",
+	[0x1a] = "CONFIG_LW_START_EP_2",
+	[0x1b] = "CONFIG_LW_ACC_EP",
+	[0x1c] = "CONFIG_LANENUM_WAIT_EP",
+	[0x1d] = "CONFIG_LANENUM_WAIT_EP_1",
+	[0x1e] = "CONFIG_LANENUM_ACC_EP",
+	[0x1f] = "CONFIG_LANENUM_ACC_EP_1",
+	[0x20] = "CONFIG_DUMMY_STATE_1",
+	[0x21] = "CONFIG_COMPLETE",
+	[0x22] = "CONFIG_COMPLETE_1",
+	[0x23] = "CONFIG_COMPLETE_2",
+	[0x24] = "CONFIG_IDLE",
+	[0x25] = "CONFIG_IDLE_1",
+	[0x26] = "CONFIG_DUMMY_STATE_2",
+	[0x27] = "CONFIG_DUMMY_STATE_3",
+	[0x28] = "CONFIG_DUMMY_STATE_4",
+	[0x29] = "L0_STATE",
+	[0x2a] = "RECOVERY_RCVR_LOCK",
+	[0x2b] = "RECOVERY_RCVR_LOCK_1",
+	[0x2c] = "RECOVERY_RCVR_CFG",
+	[0x2d] = "RECOVERY_RCVR_CFG_1",
+	[0x2e] = "RECOVERY_IDLE",
+	[0x2f] = "RECOVERY_IDLE_1",
+	[0x30] = "DISABLE_LINK",
+	[0x31] = "DISABLE_LINK_1",
+	[0x32] = "DISABLE_LINK_2",
+	[0x33] = "DISABLE_LINK_3",
+	[0x34] = "DISABLE_LINK_4",
+	[0x35] = "DISABLE_LINK_5",
+	[0x36] = "DISABLE_LINK_6",
+	[0x37] = "DISABLE_LINK_7",
+	[0x38] = "HOT_RESET",
+	[0x39] = "HOT_RESET_1",
+	[0x3a] = "HOT_RESET_2",
+	[0x3b] = "HOT_RESET_3",
+	[0x3c] = "L0S_ENTRY",
+	[0x3d] = "L0S_1",
+	[0x3e] = "L0S_2",
+	[0x3f] = "L0S_3",
+	[0x40] = "L0S_4",
+	[0x41] = "L0S_5",
+	[0x42] = "WAIT_FOR_LINK_TX",
+	[0x43] = "TX_FTS_ENTRY",
+	[0x44] = "TX_FTS_1",
+	[0x45] = "TX_FTS_2",
+	[0x46] = "TX_ELEC_IDLE_ST",
+	[0x47] = "TX_ELEC_IDLE_1",
+	[0x48] = "TX_ELEC_IDLE_2",
+	[0x49] = "TX_ELEC_IDLE_3",
+	[0x4a] = "RECOVERY_SPEED",
+	[0x4b] = "RECOVERY_SPEED_1",
+	[0x4c] = "RECOVERY_SPEED_2",
+	[0x4d] = "RECOVERY_SPEED_3",
+	[0x4e] = "POLLING_COMPLIANCE_GEN23",
+	[0x4f] = "POLLING_COMPLIANCE_GEN23_1",
+	[0x50] = "POLLING_COMPLIANCE_GEN23_2",
+	[0x51] = "POLLING_COMPLIANCE_GEN23_3",
+	[0x52] = "POLLING_COMPLIANCE_GEN23_4",
+	[0x53] = "POLLING_COMPLIANCE_GEN23_5",
+	[0x54] = "POLLING_COMPLIANCE_GEN23_6",
+	[0x55] = "POLLING_COMPLIANCE_GEN23_7",
+	[0x56] = "POLLING_COMPLIANCE_GEN23_8",
+	[0x57] = "LOOPBACK_SLAVE_ENTRY",
+	[0x58] = "LOOPBACK_SLAVE_FROM_RECOVERY",
+	[0x59] = "LOOPBACK_SLAVE_EXIT_1",
+	[0x5a] = "LOOPBACK_SLAVE_EXIT",
+	[0x5b] = "LOOPBACK_SLAVE_GEN2_1",
+	[0x5c] = "LOOPBACK_SLAVE_GEN2_2",
+	[0x5d] = "LOOPBACK_SLAVE_GEN2_3",
+	[0x5e] = "LOOPBACK_SLAVE_GEN2_4",
+	[0x5f] = "LOOPBACK_SLAVE_GEN2_5",
+	[0x60] = "LOOPBACK_SLAVE_ACTIVE",
+	[0x61] = "L1_ENTRY",
+	[0x62] = "L1_1",
+	[0x63] = "L1_2",
+	[0x64] = "L1_3",
+	[0x65] = "L1_4",
+	[0x66] = "L1_IDLE",
+	[0x67] = "L1_EXIT",
+	[0x68] = "L2_ENTRY",
+	[0x69] = "L2_1",
+	[0x6a] = "L2_2",
+	[0x6b] = "L2_3",
+	[0x6c] = "L2_4",
+	[0x6d] = "L2_5",
+	[0x6e] = "L2_IDLE",
+	[0x6f] = "LOOPBACK_MASTER_ENTRY",
+	[0x70] = "LOOPBACK_MASTER_ENTRY_1",
+	[0x71] = "LOOPBACK_MASTER_ENTRY_2",
+	[0x72] = "LOOPBACK_MASTER_ENTRY_3",
+	[0x73] = "LOOPBACK_MASTER_ENTRY_4",
+	[0x74] = "LOOPBACK_MASTER_ENTRY_5",
+	[0x75] = "LOOPBACK_MASTER_FROM_RECOVERY",
+	[0x76] = "LOOPBACK_MASTER_ACTIVE",
+	[0x77] = "LOOPBACK_MASTER_EXIT",
+	[0x78] = "LOOPBACK_MASTER_EXIT_1",
+	[0x79] = "LOOPBACK_MASTER_EXIT_2",
+	[0x7a] = "RECOVERY_EQ_PHASE_0",
+	[0x7b] = "RECOVERY_EQ_PHASE_1",
+	[0x7c] = "RECOVERY_EQ_PHASE_2_1",
+	[0x7d] = "RECOVERY_EQ_PHASE_2_2",
+	[0x7e] = "RECOVERY_EQ_PHASE_3_1",
+	[0x7f] = "RECOVERY_EQ_PHASE_3_2",
+};
+
+static const char *cdns_ltssm_state_name(u8 idx)
+{
+	if (idx < ARRAY_SIZE(cdns_ltssm_names) && cdns_ltssm_names[idx])
+		return cdns_ltssm_names[idx];
+	return "UNKNOWN";
+}
+
 static u64 bar_max_size[] = {
 	[RP_BAR0] = _ULL(128 * SZ_2G),
 	[RP_BAR1] = SZ_2G,
@@ -109,6 +260,32 @@ static int cdns_pcie_host_training_complete(struct cdns_pcie *pcie)
 	return -ETIMEDOUT;
 }
 
+static void cdns_pcie_dump_ltssm_fifo(struct cdns_pcie *pcie)
+{
+	struct device *dev = pcie->dev;
+	int i;
+	u32 data;
+
+	dev_info(dev, "--- LTSSM FIFO dump (%d entries) ---\n",
+		 CDNS_PCIE_LTSSM_FIFO_DEPTH);
+
+	for (i = 0; i < CDNS_PCIE_LTSSM_FIFO_DEPTH; i++) {
+		/*
+		 * Chip bug workaround: must read 0x760 (trigger) before
+		 * reading 0x764 (FIFO data), otherwise FIFO returns stale data.
+		 */
+		cdns_pcie_readl(pcie, CDNS_PCIE_LTSSM_FIFO_TRIG);
+		data = cdns_pcie_readl(pcie, CDNS_PCIE_LTSSM_FIFO_DATA);
+
+		dev_info(
+			dev,
+			"#%02d: 0x%08X, cause: 0x%02X, current: 0x%02X (%s), previous: 0x%02X (%s)\n",
+			i, data, (data >> 16) & 0xFF, (data >> 8) & 0x7F,
+			cdns_ltssm_state_name((data >> 8) & 0x7F), data & 0x7F,
+			cdns_ltssm_state_name(data & 0x7F));
+	}
+}
+
 static int cdns_pcie_host_wait_for_link(struct cdns_pcie *pcie)
 {
 	struct device *dev = pcie->dev;
@@ -117,15 +294,20 @@ static int cdns_pcie_host_wait_for_link(struct cdns_pcie *pcie)
 	/* Check if the link is up or not */
 	for (retries = 0; retries < LINK_WAIT_MAX_RETRIES; retries++) {
 		if (cdns_pcie_link_up(pcie)) {
-			dev_info(dev, "Link up\n");
+			dev_info(dev, "Link up, retries %d times\n", retries);
+			if (ltssm_fifo_debug)
+				cdns_pcie_dump_ltssm_fifo(pcie);
 			return 0;
 		}
 		if (pcie->plat_emu)
 			udelay(30);
 		else
-			usleep_range(LINK_WAIT_USLEEP_MIN, LINK_WAIT_USLEEP_MAX);
+			usleep_range(LINK_WAIT_USLEEP_MIN,
+				     LINK_WAIT_USLEEP_MAX);
 	}
 	dev_info(dev, "Link fail, retries %d times\n", retries);
+	if (ltssm_fifo_debug)
+		cdns_pcie_dump_ltssm_fifo(pcie);
 	return -ETIMEDOUT;
 }
 
