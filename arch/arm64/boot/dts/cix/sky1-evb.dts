@@ -1851,6 +1851,11 @@ pinctrl_gmac1: pinctrl_gmac1 {
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_fch_i2c4>;
+		eeprom: eeprom@50 {
+		status = "okay";
+		compatible = "atmel,24c64";
+		reg = <0x50>;
+	};
 
 	nfc: nfc@28 {
 		status = "disabled";
