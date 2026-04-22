@@ -16,6 +16,12 @@
 		stdout-path = &uart2;
 	};
 
+	dpu_display_cluster: linlon-display-cluster {
+		compatible = "cix,linlon-display-cluster";
+		status = "okay";
+		dpus = <&dpu0 &dpu1 &dpu2 &dpu3 &dpu4>;
+	};
+
 	dummy_codec: dummy_codec {
 		#sound-dai-cells = <1>;
 		compatible = "linux,dummy";
@@ -1177,6 +1183,7 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 &dpu0 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
@@ -1213,6 +1220,7 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 &dpu1 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
@@ -1249,6 +1257,7 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 &dpu2 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
@@ -1285,6 +1294,7 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 &dpu3 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
@@ -1321,6 +1331,7 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 &dpu4 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
