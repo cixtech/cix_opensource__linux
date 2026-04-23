@@ -21,6 +21,7 @@
 #include <linux/reset.h>
 #include <linux/kernel.h>
 #include <linux/property.h>
+#include <linux/string.h>
 
 #include "trilin_dptx_reg.h"
 #include "trilin_host_tmr.h"
@@ -1180,6 +1181,65 @@ static const struct drm_encoder_funcs trilin_dp_enc_funcs = {
 	.destroy = trilin_dp_encoder_destroy,
 };
 
+/**
+ * trilin_dp_source_id_from_peer_pipeline - derive SST source_id from Linlon pipeline
+ *
+ * When "cix,dp-source" is absent or invalid, walk the firmware graph from
+ * dev_fwnode() (Device Tree or ACPI _DSD graph) to the peer DPU pipeline node
+ * (parent of the remote endpoint's port) and use pipeline "reg", or the
+ * numeric suffix in name "pipeline@N" when reg is not present.
+ */
+static int trilin_dp_source_id_from_peer_pipeline(struct device *dp_dev,
+						  u32 max_streams, u32 *sid)
+{
+	const struct fwnode_handle *top = dev_fwnode(dp_dev);
+	struct fwnode_handle *ep = NULL;
+	struct fwnode_handle *remote_ep;
+	struct fwnode_handle *port_fw;
+	struct fwnode_handle *pipeline_fw;
+	u32 idx = U32_MAX;
+	const char *pn;
+	int err;
+
+	if (!top)
+		return -ENOENT;
+
+	fwnode_graph_for_each_endpoint(top, ep) {
+		remote_ep = fwnode_graph_get_remote_endpoint(ep);
+		if (!remote_ep)
+			continue;
+
+		port_fw = fwnode_get_parent(remote_ep);
+		fwnode_handle_put(remote_ep);
+		if (!port_fw)
+			continue;
+
+		pipeline_fw = fwnode_get_parent(port_fw);
+		fwnode_handle_put(port_fw);
+		if (!pipeline_fw)
+			continue;
+
+		err = fwnode_property_read_u32(pipeline_fw, "reg", &idx);
+		if (err) {
+			pn = fwnode_get_name(pipeline_fw);
+			if (pn && str_has_prefix(pn, "pipeline@"))
+				err = kstrtou32(pn + strlen("pipeline@"), 0, &idx);
+			else
+				err = -EINVAL;
+		}
+
+		fwnode_handle_put(pipeline_fw);
+
+		if (!err && idx < max_streams) {
+			*sid = idx;
+			fwnode_handle_put(ep);
+			return 0;
+		}
+	}
+
+	return -ENOENT;
+}
+
 int trilin_dp_drm_init(struct trilin_dpsub *dpsub)
 {
 	struct trilin_dp *dp = dpsub->dp;
@@ -1233,13 +1293,20 @@ int trilin_dp_drm_init(struct trilin_dpsub *dpsub)
 	if (!IS_ERR_OR_NULL(dp->rcsu_iomem))
 		connector->ycbcr_420_allowed = true;
 	dp->dp_panel.connector = &dp->connector;
-	/* SST: single stream; source from DTS cix,dp-source. */
+	/* SST: single stream; source from DTS cix,dp-source or peer pipeline reg. */
 	dp->dp_panel.source_id = 0;
 	if (dp->dev) {
-		u32 dp_source;
+		u32 dp_source = 0;
+		bool have = false;
 
 		if (device_property_read_u32(dp->dev, "cix,dp-source", &dp_source) == 0 &&
-		    dp_source < dp->max_streams)
+		    dp_source < dp->max_streams) {
+			dp->dp_panel.source_id = dp_source;
+			have = true;
+		}
+		if (!have &&
+		    !trilin_dp_source_id_from_peer_pipeline(dp->dev, dp->max_streams,
+							    &dp_source))
 			dp->dp_panel.source_id = dp_source;
 	}
 	dp->connector.dp_panel = &dp->dp_panel;
