@@ -487,11 +487,7 @@
 			CIX_PAD_GPIO042_FUNC_USB_DRIVE_VBUS5 (PULL_DOWN|DS_LEVEL4)
 		>;
 	};
-	pinctrl_usb6: pinctrl_usb6_oc_grp {
-		sky1,pins = <
-			CIX_PAD_GPIO030_FUNC_GPIO030 (PULL_UP|DS_LEVEL4)
-		>;
-	};
+
 	pinctrl_usb7: pinctrl_usb7_oc_grp {
 		sky1,pins = <
 			CIX_PAD_GPIO031_FUNC_GPIO031 (PULL_UP|DS_LEVEL4)
@@ -1670,7 +1666,6 @@ pinctrl_gmac1: pinctrl_gmac1 {
 
 &sky1_usbhs_0 {
 	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_usb6>;
 	sof_clk_freq = <8000000>;
 	lpm_clk_freq = <32000>;
 	status = "okay";
