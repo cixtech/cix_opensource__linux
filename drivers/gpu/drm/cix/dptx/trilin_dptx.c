@@ -2325,7 +2325,8 @@ static int trinlin_dp_panel_read_sink_caps(struct trilin_dp *dp)
 	if(dp->mst_default_on)
 		dp->caps.mst = drm_dp_read_mst_cap(&dp->aux, dp->dpcd);
 
-	trilin_dp_psr_init_dpcd(dp);
+	if (dp->dpcd[DP_EDP_CONFIGURATION_CAP])
+		trilin_dp_psr_init_dpcd(dp);
 
 	rlen = drm_dp_dpcd_read(drm_aux, DP_DPRX_FEATURE_ENUMERATION_LIST,
 				&rx_feature, 1);
