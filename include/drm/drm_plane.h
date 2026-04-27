@@ -876,12 +876,18 @@ static inline unsigned int drm_plane_index(const struct drm_plane *plane)
 }
 
 /**
- * drm_plane_mask - find the mask of a registered plane
+ * drm_plane_mask - Bit mask for one plane (!= plane object id).
+ *
+ * Must be u64 / 1ULL shift: Linlon-like drivers register 30+ planes (cluster +
+ * pipelines + layers); index may be >= 32. Legacy ``1 << index`` truncates at 32
+ * bits and unrelated planes alias to the same mask → bogus
+ * "Primary plane used for multiple CRTCs" in drm_mode_config_validate().
+ *
  * @plane: plane to find mask for
  */
-static inline u32 drm_plane_mask(const struct drm_plane *plane)
+static inline u64 drm_plane_mask(const struct drm_plane *plane)
 {
-	return 1 << drm_plane_index(plane);
+	return 1ULL << drm_plane_index(plane);
 }
 
 struct drm_plane * drm_plane_from_index(struct drm_device *dev, int idx);
