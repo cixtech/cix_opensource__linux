@@ -1,0 +1,18 @@
+/*
+ * Copyright (c) 2022, Cix Technology Group Co., Ltd. All rights reserved.
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#include "sky1-orion-o6.dts"
+#include "sky1-android-common.dtsi"
+
+/ {
+	memory@80000000 {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		device_type = "memory";
+		reg = <0x00000000 0x86000000 0x0 0x7A000000>,
+			<0x00000001 0x00000000 0x3 0x50000000>;
+	};
+};

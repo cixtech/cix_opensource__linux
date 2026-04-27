@@ -1,0 +1,21 @@
+/*
+ * Copyright 2026 Cix Technology Group Co., Ltd.
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+/dts-v1/;
+
+#include "sky1-evb-android.dts"
+
+&vpu_private {
+	status = "okay";
+};
+
+&vpu_protected {
+	status = "okay";
+};
+
+&media_protected {
+	status = "okay";
+};

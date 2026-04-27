@@ -1,0 +1,22 @@
+/*
+ * Copyright (c) 2022, Cix Technology Group Co., Ltd. All rights reserved.
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+/ {
+	firmware {
+		android {
+			compatible = "android,firmware";
+			vbmeta {
+				/*we need use FirstStageMountVBootV2 if we enable avb*/
+				compatible = "android,vbmeta";
+				/*parts means the partition witch can be mount in first stage*/
+				parts = "vbmeta,dtbo,boot,init_boot,system,vendor,product";
+			};
+		};
+		optee {
+			compatible = "linaro,optee-tz";
+			method = "smc";
+		};
+	};
+};

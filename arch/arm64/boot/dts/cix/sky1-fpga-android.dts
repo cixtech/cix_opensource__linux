@@ -1,0 +1,110 @@
+/*
+ * Copyright (c) 2022, Cix Technology Group Co., Ltd. All rights reserved.
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#include "sky1-fpga.dts"
+#include "sky1-android-common.dtsi"
+
+/ {
+	chosen {
+		rng-seed = "cix random seed dasdasasdasdasvvjkdvsdvnkksdvfsdjfskdfsdfksdfsdhfsckscjscksdfjsdjf";
+	};
+
+	memory@80000000 {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		device_type = "memory";
+		reg = <0x00000000 0x84400000 0x0 0x7BC00000>,
+			<0x00000001 0x00000000 0x0 0x40000000>;
+	};
+
+	/delete-node/ virtual-encoder@0;
+
+	virtual-encoder@0 {
+		compatible = "cix,virtual-display";
+		status = "okay";
+
+		port {
+			vt_enc0_in: endpoint {
+				remote-endpoint = <&dpu2_pipe0_out>;
+			};
+		};
+	};
+
+	virtual-encoder@1 {
+		compatible = "cix,virtual-display";
+		status = "okay";
+
+		port {
+			vt_enc1_in: endpoint {
+				remote-endpoint = <&dpu2_pipe1_out>;
+			};
+		};
+	};
+};
+
+&dp2 {
+	status = "disbaled";
+	/delete-node/ port;
+};
+
+&aipu_res_0 {
+        status = "disabled";
+};
+
+&dpu2 {
+	status = "okay";
+
+	dpu2_pipe0: pipeline@0 {
+		reg = <0>;
+
+		port {
+			dpu2_pipe0_out: endpoint {
+				remote-endpoint = <&vt_enc0_in>;
+			};
+		};
+	};
+
+	dpu2_pipe1: pipeline@1 {
+		reg = <1>;
+
+		port {
+			dpu2_pipe1_out: endpoint {
+			};
+		};
+	};
+};
+
+&arch_timer {
+        clock-frequency = <1000000000>;
+};
+
+&smmu_mmhub{
+	status = "okay";
+};
+
+&sky1_usbss_0 {
+        lpm_clk_freq = <4000000>;
+        sof_clk_freq = <4000000>;
+        status = "disabled";
+};
+
+&usbss_0 {
+        dr_mode = "peripheral";
+        status = "disabled";
+};
+
+&its_pcie {
+        status = "disabled";
+};
+
+&smmu_pciehub{
+        status = "disabled";
+};
+
+&pcie_x4_rc {
+       override-phy-rate;
+       status = "disabled";
+};

@@ -1,0 +1,49 @@
+/*
+ * Copyright (c) 2022, Cix Technology Group Co., Ltd. All rights reserved.
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+#include "sky1-evb.dts"
+#include "sky1-android-common.dtsi"
+&panel_edp0 {
+	status = "okay";
+};
+&dptx0_audio {
+	status = "disabled";
+};
+&i2s5 {
+	status = "disabled";
+};
+&dptx1_audio {
+	status = "disabled";
+};
+&i2s6 {
+	status = "disabled";
+};
+&dptx2_audio {
+	status = "disabled";
+};
+&i2s7 {
+	status = "disabled";
+};
+&dptx3_audio {
+	status = "disabled";
+};
+&i2s8 {
+	status = "disabled";
+};
+&dptx4_audio {
+	status = "disabled";
+};
+&i2s9 {
+	status = "disabled";
+};
+/ {
+	memory@80000000 {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		device_type = "memory";
+                    reg = <0x00000000 0x86000000 0x0 0x7A000000>,
+                            <0x00000001 0x00000000 0x3 0x50000000>;
+	};
+};
