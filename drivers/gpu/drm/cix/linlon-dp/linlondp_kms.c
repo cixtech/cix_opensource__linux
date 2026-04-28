@@ -32,9 +32,12 @@ MODULE_PARM_DESC(enable_render, "Enable render node support (true/false)");
 
 #if IS_ENABLED(CONFIG_IOMMU_API)
 /*
- * Cluster KMS allocates GEM/DMA on dpu0's struct device only. Each DPU has
- * distinct SMMU stream IDs; the same IOVA must be mapped in every master's
- * IOMMU domain or non-primary DPUs see AXI errors (AXIE) on scanout.
+ * Cluster KMS allocates GEM/DMA on dpu0's struct device. Each DPU has distinct
+ * SMMU stream IDs, so scanout on non-primary DPUs still needs domain mappings.
+ *
+ * To reduce import-time overhead, mappings are established on-demand for the
+ * DPU domains actually used by current atomic state, instead of pre-mirroring
+ * all cluster DPUs on every import.
  */
 static void linlondp_cluster_iommu_unmap_mirror(struct linlondp_kms_dev *kms,
 						struct drm_gem_dma_object *dma_obj)
@@ -54,61 +57,72 @@ static void linlondp_cluster_iommu_unmap_mirror(struct linlondp_kms_dev *kms,
 		if (!di || di == d0)
 			continue;
 		for (off = 0; off < size; off += PAGE_SIZE) {
-			if (iommu_iova_to_phys(di, iova + off))
+			if (iommu_iova_to_phys(di, iova + off)) {
 				iommu_unmap(di, iova + off, PAGE_SIZE);
+			}
 		}
 	}
 }
 
-static int linlondp_cluster_iommu_map_mirror(struct linlondp_kms_dev *kms,
-					   struct drm_gem_dma_object *dma_obj)
+static int linlondp_cluster_get_hw_idx(struct linlondp_kms_dev *kms,
+				       struct linlondp_dev *mdev)
+{
+	unsigned int i;
+
+	for (i = 0; i < kms->n_hw_mdevs; i++) {
+		if (kms->hw_mdevs[i] == mdev)
+			return i;
+	}
+
+	return -ENODEV;
+}
+
+static int linlondp_cluster_iommu_map_domain(struct linlondp_kms_dev *kms,
+					     struct drm_gem_dma_object *dma_obj,
+					     unsigned int target_idx)
 {
 	struct iommu_domain *d0;
+	struct iommu_domain *dt;
 	dma_addr_t iova = dma_obj->dma_addr;
 	size_t size = dma_obj->base.size;
 	unsigned long off;
-	unsigned int i;
 	int ret;
 	const int prot = IOMMU_READ | IOMMU_WRITE;
 
+	if (!target_idx || target_idx >= kms->n_hw_mdevs)
+		return 0;
+
 	d0 = iommu_get_domain_for_dev(kms->hw_mdevs[0]->dev);
+	dt = iommu_get_domain_for_dev(kms->hw_mdevs[target_idx]->dev);
+	if (!dt || dt == d0)
+		return 0;
 
 	if (!d0) {
 		if (!dma_obj->vaddr) {
 			DRM_WARN("linlon cluster: skip IOMMU mirror (no dpu0 domain, no vaddr)\n");
 			return 0;
 		}
-		for (i = 1; i < kms->n_hw_mdevs; i++) {
-			struct iommu_domain *di =
-				iommu_get_domain_for_dev(kms->hw_mdevs[i]->dev);
+		for (off = 0; off < size; off += PAGE_SIZE) {
+			phys_addr_t phys;
 
-			if (!di)
+			if (iommu_iova_to_phys(dt, iova + off))
 				continue;
-			for (off = 0; off < size; off += PAGE_SIZE) {
-				phys_addr_t phys = virt_to_phys(
-					(char *)dma_obj->vaddr + off);
-
-				ret = iommu_map(di, iova + off, phys, PAGE_SIZE,
-						prot, GFP_KERNEL);
-				if (ret) {
-					linlondp_cluster_iommu_unmap_mirror(kms,
-									    dma_obj);
-					return ret;
-				}
+			phys = virt_to_phys((char *)dma_obj->vaddr + off);
+			ret = iommu_map(dt, iova + off, phys, PAGE_SIZE, prot,
+					GFP_KERNEL);
+			if (ret) {
+				linlondp_cluster_iommu_unmap_mirror(kms, dma_obj);
+				return ret;
 			}
 		}
-		return 0;
-	}
-
-	for (i = 1; i < kms->n_hw_mdevs; i++) {
-		struct iommu_domain *di =
-			iommu_get_domain_for_dev(kms->hw_mdevs[i]->dev);
-
-		if (!di || di == d0)
-			continue;
+	} else {
 		for (off = 0; off < size; off += PAGE_SIZE) {
-			phys_addr_t phys = iommu_iova_to_phys(d0, iova + off);
+			phys_addr_t phys;
 
+			if (iommu_iova_to_phys(dt, iova + off))
+				continue;
+
+			phys = iommu_iova_to_phys(d0, iova + off);
 			if (!phys) {
 				DRM_ERROR(
 					"linlon cluster: no PA for IOVA %pad+%lx in dpu0 IOMMU domain\n",
@@ -116,12 +130,12 @@ static int linlondp_cluster_iommu_map_mirror(struct linlondp_kms_dev *kms,
 				linlondp_cluster_iommu_unmap_mirror(kms, dma_obj);
 				return -EFAULT;
 			}
-			ret = iommu_map(di, iova + off, phys, PAGE_SIZE, prot,
+			ret = iommu_map(dt, iova + off, phys, PAGE_SIZE, prot,
 					GFP_KERNEL);
 			if (ret) {
 				DRM_ERROR(
 					"linlon cluster: IOMMU map DPU%u IOVA %pad: %d\n",
-					i, &iova, ret);
+					target_idx, &iova, ret);
 				linlondp_cluster_iommu_unmap_mirror(kms, dma_obj);
 				return ret;
 			}
@@ -137,11 +151,21 @@ static void linlondp_cluster_iommu_unmap_mirror(struct linlondp_kms_dev *kms,
 	(void)dma_obj;
 }
 
-static int linlondp_cluster_iommu_map_mirror(struct linlondp_kms_dev *kms,
-					   struct drm_gem_dma_object *dma_obj)
+static int linlondp_cluster_get_hw_idx(struct linlondp_kms_dev *kms,
+				       struct linlondp_dev *mdev)
+{
+	(void)kms;
+	(void)mdev;
+	return -ENODEV;
+}
+
+static int linlondp_cluster_iommu_map_domain(struct linlondp_kms_dev *kms,
+					     struct drm_gem_dma_object *dma_obj,
+					     unsigned int target_idx)
 {
 	(void)kms;
 	(void)dma_obj;
+	(void)target_idx;
 	return 0;
 }
 #endif
@@ -198,12 +222,6 @@ static int linlondp_gem_dma_dumb_create(struct drm_file *file,
 	if (IS_ERR(dma_obj))
 		return PTR_ERR(dma_obj);
 
-	ret = linlondp_cluster_iommu_map_mirror(kms, dma_obj);
-	if (ret) {
-		drm_gem_object_put(&dma_obj->base);
-		return ret;
-	}
-
 	dma_obj->base.funcs = &linlondp_cluster_gem_funcs;
 
 	ret = drm_gem_handle_create(file, &dma_obj->base, &args->handle);
@@ -224,13 +242,6 @@ linlondp_gem_prime_import_sg_table(struct drm_device *dev,
 		return obj;
 
 	if (kms->n_hw_mdevs > 1) {
-		int ret = linlondp_cluster_iommu_map_mirror(
-			kms, to_drm_gem_dma_obj(obj));
-
-		if (ret) {
-			drm_gem_object_put(obj);
-			return ERR_PTR(ret);
-		}
 		obj->funcs = &linlondp_cluster_gem_funcs;
 	}
 	return obj;
@@ -464,6 +475,8 @@ static int linlondp_kms_check(struct drm_device *dev,
 			      struct drm_atomic_state *state)
 {
 	struct linlondp_kms_dev *kms = to_kdev(dev);
+	struct drm_plane *plane;
+	struct drm_plane_state *new_plane_st;
 	struct drm_crtc *crtc;
 	struct drm_crtc_state *old_crtc_st, *new_crtc_st;
 	int i, err;
@@ -497,6 +510,48 @@ static int linlondp_kms_check(struct drm_device *dev,
 		err = linlondp_crtc_normalize_zpos(crtc, new_crtc_st);
 		if (err)
 			return err;
+	}
+
+	if (kms->n_hw_mdevs > 1) {
+		for_each_new_plane_in_state(state, plane, new_plane_st, i) {
+			struct linlondp_plane *kplane;
+			struct drm_framebuffer *fb;
+			struct linlondp_dev *pmdev;
+			int hw_idx;
+			unsigned int p;
+
+			if (!new_plane_st->crtc || !new_plane_st->fb)
+				continue;
+
+			new_crtc_st = drm_atomic_get_new_crtc_state(
+				state, new_plane_st->crtc);
+			if (!new_crtc_st || !new_crtc_st->active)
+				continue;
+
+			kplane = to_kplane(plane);
+			pmdev = kplane->layer->base.pipeline->mdev;
+			hw_idx = linlondp_cluster_get_hw_idx(kms, pmdev);
+			if (hw_idx <= 0)
+				continue;
+
+			fb = new_plane_st->fb;
+			for (p = 0; p < fb->format->num_planes; p++) {
+				struct drm_gem_object *obj = fb->obj[p];
+				struct drm_gem_dma_object *dma_obj;
+
+				if (!obj)
+					continue;
+				dma_obj = to_drm_gem_dma_obj(obj);
+				err = linlondp_cluster_iommu_map_domain(
+					kms, dma_obj, hw_idx);
+				if (err) {
+					DRM_ERROR(
+						"linlon cluster: ensure map failed plane=%s dpu=%d err=%d\n",
+						plane->name, hw_idx, err);
+					return err;
+				}
+			}
+		}
 	}
 
 	err = drm_atomic_helper_check_planes(dev, state);
