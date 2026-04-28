@@ -470,7 +470,7 @@ static void linlondp_platform_shutdown(struct platform_device *pdev)
 	if (linlondp_drvdata_is_direct_mdev(&pdev->dev)) {
 		struct linlondp_dev *mdev = platform_get_drvdata(pdev);
 
-		linlondp_dev_suspend(mdev);
+		linlondp_pm_suspend(&pdev->dev);
 		mdev->shutdown = true;
 		return;
 	}
