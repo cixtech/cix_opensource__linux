@@ -25,6 +25,7 @@
  * `device-id` in DT is the driver's logical id (DSM/debugfs), not the SMMU SID.
  */
 #include <linux/component.h>
+#include <linux/device.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
@@ -41,6 +42,7 @@
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_fbdev_generic.h>
 #include <drm/drm_module.h>
+#include <drm/drm_modeset_helper.h>
 
 #include "linlondp_dev.h"
 #include "linlondp_kms.h"
@@ -390,6 +392,43 @@ static int linlondp_cluster_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+/* Cluster owns KMS; per-DPU PM uses direct_mdev and skips modeset suspend. */
+static int linlondp_cluster_pm_prepare(struct device *dev)
+{
+	struct linlondp_cluster *cl = dev_get_drvdata(dev);
+
+	if (!cl || !cl->kms)
+		return 0;
+
+	return drm_mode_config_helper_suspend(&cl->kms->base);
+}
+
+static int linlondp_cluster_resume_modeset(struct device *dev)
+{
+	struct linlondp_cluster *cl = dev_get_drvdata(dev);
+
+	if (!cl || !cl->kms)
+		return 0;
+
+	return drm_mode_config_helper_resume(&cl->kms->base);
+}
+
+static void linlondp_cluster_pm_complete(struct device *dev)
+{
+	linlondp_cluster_resume_modeset(dev);
+}
+
+static const struct dev_pm_ops linlondp_cluster_pm_ops = {
+	.prepare = linlondp_cluster_pm_prepare,
+	.complete = linlondp_cluster_pm_complete,
+	.freeze = linlondp_cluster_pm_prepare,
+	.thaw = linlondp_cluster_resume_modeset,
+	.poweroff = linlondp_cluster_pm_prepare,
+	.restore = linlondp_cluster_resume_modeset,
+};
+#endif
+
 static const struct of_device_id linlondp_cluster_of_match[] = {
 	{ .compatible = "cix,linlon-display-cluster" },
 	{},
@@ -403,5 +442,8 @@ struct platform_driver linlondp_cluster_driver = {
 		.name = "linlondp-cluster",
 		.of_match_table = linlondp_cluster_of_match,
 		.acpi_match_table = ACPI_PTR(linlondp_cluster_acpi_match),
+#ifdef CONFIG_PM
+		.pm = &linlondp_cluster_pm_ops,
+#endif
 	},
 };
