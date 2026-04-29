@@ -257,18 +257,20 @@ static int linlondp_dpu_slave_probe(struct platform_device *pdev)
 {
 	struct linlondp_dev *mdev;
 
+	mdev = linlondp_dev_create(&pdev->dev);
+	if (IS_ERR(mdev))
+		return PTR_ERR(mdev);
+
 	/*
-	 * Match linlondp_bind / DPTSW-13544: enable runtime PM before
-	 * linlondp_dev_create() so pm_runtime_get_sync() inside create drives GenPD
-	 * correctly (identify path). Cluster bind skips duplicate pm_runtime_enable.
+	 * Enable runtime PM only after identify/init inside create completes.
+	 * Calling pm_runtime_enable *before* linlondp_dev_create() reorders GenPD
+	 * vs SMMU during probe and triggered intermittent faults; enabling here keeps
+	 * the stable probe sequence while allowing runtime_suspend to gate clocks /
+	 * GenPD when idle (usage count is 0 after create’s pm_runtime_put).
 	 */
 	pm_runtime_enable(&pdev->dev);
-	mdev = linlondp_dev_create(&pdev->dev);
-	if (IS_ERR(mdev)) {
-		if (pm_runtime_enabled(&pdev->dev))
-			pm_runtime_disable(&pdev->dev);
-		return PTR_ERR(mdev);
-	}
+	pm_runtime_idle(&pdev->dev);
+
 	platform_set_drvdata(pdev, mdev);
 	return 0;
 }
