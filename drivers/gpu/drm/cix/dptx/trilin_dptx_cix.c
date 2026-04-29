@@ -230,6 +230,18 @@ static int trilin_dptx_pm_prepare(struct device *dev)
 	return 0;
 }
 
+static int trilin_dptx_pm_shutdown(struct device *dev)
+{
+	struct trilin_dptx_cix_dev *cix_dptx = dev_get_drvdata(dev);
+	struct trilin_dpsub *dpsub = &cix_dptx->dpsub;
+	struct trilin_dp *dp = dpsub->dp;
+
+	if (dp)
+		trilin_dp_pm_shutdown(dp);
+
+	dev_info(dev, "%s\n", __func__);
+	return 0;
+}
 
 static int trilin_dptx_pm_suspend(struct device *dev)
 {
@@ -277,7 +289,7 @@ static const struct dev_pm_ops trilin_dptx_pm_ops = {
 
 static void trilin_dptx_cix_shutdown(struct platform_device *pdev)
 {
-	trilin_dptx_pm_suspend(&pdev->dev);
+	trilin_dptx_pm_shutdown(&pdev->dev);
 }
 
 static struct platform_driver trilin_dp_driver = {

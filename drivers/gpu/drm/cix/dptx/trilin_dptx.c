@@ -2895,6 +2895,15 @@ end:
 	return 0;
 }
 
+int trilin_dp_pm_shutdown(struct trilin_dp *dp)
+{
+	mutex_lock(&dp->session_lock);
+	dp->active_stream_cnt = 0;
+	mutex_unlock(&dp->session_lock);
+
+	trilin_dp_pm_prepare(dp);
+	return 0;
+}
 #define DUMP_DP_REG(reg)                                    \
 	seq_printf(m, "0x%0x : 0x%0x\n", (unsigned int)reg, \
 		   trilin_dp_read(dp, reg))
