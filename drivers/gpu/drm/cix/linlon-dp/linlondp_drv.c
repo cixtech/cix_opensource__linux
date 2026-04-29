@@ -257,9 +257,18 @@ static int linlondp_dpu_slave_probe(struct platform_device *pdev)
 {
 	struct linlondp_dev *mdev;
 
+	/*
+	 * Match linlondp_bind / DPTSW-13544: enable runtime PM before
+	 * linlondp_dev_create() so pm_runtime_get_sync() inside create drives GenPD
+	 * correctly (identify path). Cluster bind skips duplicate pm_runtime_enable.
+	 */
+	pm_runtime_enable(&pdev->dev);
 	mdev = linlondp_dev_create(&pdev->dev);
-	if (IS_ERR(mdev))
+	if (IS_ERR(mdev)) {
+		if (pm_runtime_enabled(&pdev->dev))
+			pm_runtime_disable(&pdev->dev);
 		return PTR_ERR(mdev);
+	}
 	platform_set_drvdata(pdev, mdev);
 	return 0;
 }
@@ -268,6 +277,8 @@ static int linlondp_dpu_slave_remove(struct platform_device *pdev)
 {
 	struct linlondp_dev *mdev = platform_get_drvdata(pdev);
 
+	if (pm_runtime_enabled(&pdev->dev))
+		pm_runtime_disable(&pdev->dev);
 	if (mdev)
 		linlondp_dev_destroy(mdev);
 	platform_set_drvdata(pdev, NULL);

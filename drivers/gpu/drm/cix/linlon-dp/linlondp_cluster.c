@@ -32,6 +32,9 @@
 #include <linux/platform_device.h>
 #include <linux/aperture.h>
 #include <linux/pm_runtime.h>
+#if IS_ENABLED(CONFIG_ACPI)
+#include <linux/pm.h>
+#endif
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/acpi.h>
@@ -71,22 +74,18 @@ static int linlondp_cluster_bind(struct device *dev)
 	}
 
 	/*
-	 * Root cause (cluster, multi-DPU):
-	 * - Each CRTC pipeline sits on one linlondp_dev; linlondp_crtc_atomic_enable()
-	 *   uses that mdev’s struct device for pm_runtime_get_sync() and (when CONFIG_PM)
-	 *   requires pm_runtime_enabled(mdev->dev) before proceeding.
-	 * - Original code only pm_runtime_enable(d0). For dpu1+ the flag never became
-	 *   true, so atomic_enable aborted before get_sync/enable_irq/vblank_on → no
-	 *   vsync / flip completion (often misread as “IRQ broken on dpu1”).
-	 * - Fix: enable runtime on every cluster member here. Do not patch this in
-	 *   atomic_enable (unbalanced vs bind). After replacing linlon-dp.ko, run
-	 *   update-initramfs on the target or the initrd may still load an old module.
+	 * Cluster DPUs are slaves: linlondp_dpu_slave_probe() already calls
+	 * pm_runtime_enable() before linlondp_dev_create() (same order as master /
+	 * DPTSW-13544). Only enable here if not yet enabled (older probe path).
+	 * atomic_enable still requires pm_runtime_enabled() on every mdev.
 	 */
 	for (i = 0; i < cl->n_mdevs; i++) {
-		pm_runtime_enable(cl->mdevs[i]->dev);
-		dev_notice(dev,
-			   "linlon-cluster: pm_runtime_enable DPU%u %s\n", i,
-			   dev_name(cl->mdevs[i]->dev));
+		if (!pm_runtime_enabled(cl->mdevs[i]->dev)) {
+			pm_runtime_enable(cl->mdevs[i]->dev);
+			dev_notice(dev,
+				   "linlon-cluster: pm_runtime_enable DPU%u %s\n", i,
+				   dev_name(cl->mdevs[i]->dev));
+		}
 	}
 
 	cl->kms = linlondp_kms_attach_cluster(dev, cl->mdevs, cl->n_mdevs);
@@ -318,6 +317,12 @@ static int linlondp_cluster_probe_acpi(struct platform_device *pdev)
 	dev_info(dev,
 		 "linlon-cluster: registered %u DPU(s) for ACPI cluster %s, component master\n",
 		 cl->n_mdevs, hid ? hid : "?");
+
+	/*
+	 * Match linlondp_platform_probe() ACPI branch only: OF master does not set
+	 * this. Avoid direct_complete when ACPI + pipeline/component graph is used.
+	 */
+	dev_pm_set_driver_flags(&pdev->dev, DPM_FLAG_NO_DIRECT_COMPLETE);
 
 	err = component_master_add_with_match(dev, &linlondp_cluster_master_ops,
 					      match);
