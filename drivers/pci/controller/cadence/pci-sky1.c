@@ -108,6 +108,9 @@
 
 #define PCIE_RESET_CONFIG_WAIT_MS	100
 
+/* Pre-EP-power delay on x8 when a display-class GPU is downstream (resume). */
+#define SKY1_PCIE_X8_GPU_RESUME_MS	500
+
 static DEFINE_MUTEX(sky1_init_mutex);
 static DEFINE_MUTEX(sky1_x211_mutex);
 static atomic_t phy_rst_deassert_cnt = ATOMIC_INIT(0);
@@ -287,6 +290,65 @@ void sky1_pcie_enable_indicatbit_int(struct sky1_pcie *pcie, bool en)
 		sky1_pcie_ctrl_writel_reg(pcie, LTSSM_TRANS_DEBUG_CTRL_STATUS,
 					  reg);
 	}
+}
+
+/* Display controller / GPU (VGA, 3D, etc.); not only PCI_CLASS_DISPLAY_VGA. */
+static bool sky1_pcie_pci_class_is_display(unsigned int class_rev)
+{
+	return ((class_rev >> 16) & 0xff) == PCI_BASE_CLASS_DISPLAY;
+}
+
+static bool sky1_pcie_bus_subtree_has_display(struct pci_bus *bus)
+{
+	struct pci_dev *pdev;
+	struct pci_bus *child;
+
+	if (!bus)
+		return false;
+
+	list_for_each_entry(pdev, &bus->devices, bus_list) {
+		if (sky1_pcie_pci_class_is_display(pdev->class))
+			return true;
+		if (pdev->subordinate &&
+		    sky1_pcie_bus_subtree_has_display(pdev->subordinate))
+			return true;
+	}
+
+	list_for_each_entry(child, &bus->children, node) {
+		if (sky1_pcie_bus_subtree_has_display(child))
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * True if any display-class device exists under this host bridge root bus
+ * (full subtree: root port subordinate, switches, any slot).
+ */
+static bool sky1_pcie_downstream_has_display(struct sky1_pcie *pcie)
+{
+	struct pci_host_bridge *bridge;
+
+	bridge = pci_host_bridge_from_priv(pcie->cdns_pcie_rc);
+	if (!bridge || !bridge->bus)
+		return false;
+
+	return sky1_pcie_bus_subtree_has_display(bridge->bus);
+}
+
+/*
+ * Arm x8_vga_resume_delay for PCIE_ID_x8 when a display device exists under
+ * this RC. Call from suspend_noirq before link teardown.
+ */
+static void sky1_pcie_refresh_x8_gpu_resume_delay(struct sky1_pcie *pcie)
+{
+	pcie->x8_vga_resume_delay = false;
+
+	if (pcie->desc->id != PCIE_ID_x8)
+		return;
+
+	pcie->x8_vga_resume_delay = sky1_pcie_downstream_has_display(pcie);
 }
 
 static struct pci_dev *sky1_pcie_get_ep_pci_dev(struct sky1_pcie *pcie)
@@ -2534,6 +2596,9 @@ static int sky1_pcie_suspend_noirq(struct device *dev)
 
 	if (!pcie->is_probe)
 		return 0;
+
+	sky1_pcie_refresh_x8_gpu_resume_delay(pcie);
+
 	sky1_pcie_pme_turn_off(pcie);
 	sky1_pcie_stop_link(pcie->cdns_pcie);
 	sky1_pcie_set_link_disable(pcie);
@@ -2589,6 +2654,13 @@ static int sky1_pcie_resume_noirq(struct device *dev)
 
 	if (!pcie->is_probe)
 		return 0;
+
+	/*
+	 * Some discrete GPUs need extra time after SoC wake before slot power
+	 * and link training; only when an x8 display device was seen downstream.
+	 */
+	if (pcie->x8_vga_resume_delay)
+		msleep(SKY1_PCIE_X8_GPU_RESUME_MS);
 
 	if (!pcie->str_pwron)
 		sky1_pcie_en_ep_power(pcie, true);

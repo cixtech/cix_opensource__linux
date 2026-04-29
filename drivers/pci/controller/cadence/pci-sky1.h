@@ -151,6 +151,12 @@ struct sky1_pcie {
 	bool str_pwron;
 	bool std_pwron;
 	u32 re_pwron_delay_ms;
+	/*
+	 * PCIE_ID_x8 + downstream PCI class display (full bus subtree).
+	 * resume_noirq pre-power delay; refreshed in suspend_noirq before link
+	 * teardown.
+	 */
+	bool x8_vga_resume_delay;
 	u32 aer_c_irq;
 	u32 aer_f_irq;
 	u32 aer_nf_irq;
