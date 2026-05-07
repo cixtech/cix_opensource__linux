@@ -170,6 +170,8 @@ static int linlondp_cluster_acpi_child_cb(struct acpi_device *child, void *data)
 	put_device(phys);
 	if (!mdev)
 		return -EPROBE_DEFER;
+	if (IS_ERR(mdev))
+		return PTR_ERR(mdev);
 
 	ctx->cl->mdevs[ctx->idx] = mdev;
 	err = linlondp_dpu_add_graph_slaves(ctx->cluster_dev, ctx->match, mdev->dev);
@@ -242,6 +244,10 @@ static int linlondp_cluster_collect_dpus_acpi_paths(struct device *dev,
 		if (!cl->mdevs[n]) {
 			kfree(kbuf);
 			return -EPROBE_DEFER;
+		}
+		if (IS_ERR(cl->mdevs[n])) {
+			kfree(kbuf);
+			return PTR_ERR(cl->mdevs[n]);
 		}
 
 		err = linlondp_dpu_add_graph_slaves(dev, match, cl->mdevs[n]->dev);
@@ -338,7 +344,7 @@ static int linlondp_cluster_probe_of(struct platform_device *pdev)
 	struct linlondp_cluster *cl;
 	struct component_match *match = NULL;
 	struct device_node *np = dev->of_node;
-	int n, i, err;
+	int n, i, used = 0, err;
 
 	if (!np)
 		return -ENODEV;
@@ -364,21 +370,36 @@ static int linlondp_cluster_probe_of(struct platform_device *pdev)
 
 		dpu_pdev = of_find_device_by_node(dpu_np);
 		of_node_put(dpu_np);
-		if (!dpu_pdev)
-			return dev_err_probe(dev, -EPROBE_DEFER, "dpu %d not ready\n", i);
+		if (!dpu_pdev) {
+			dev_warn(dev,
+				 "dpu %d platform device missing, skipping directly\n",
+				 i);
+			continue;
+		}
 
 		mdev = platform_get_drvdata(dpu_pdev);
 		put_device(&dpu_pdev->dev);
 		if (!mdev)
 			return dev_err_probe(dev, -EPROBE_DEFER, "dpu %d has no mdev\n", i);
+		if (IS_ERR(mdev))
+			return dev_err_probe(dev, PTR_ERR(mdev), "dpu %d mdev error\n", i);
+		dev_info(dev, "dpu %d ready: %s\n", i, dev_name(mdev->dev));
 
-		cl->mdevs[i] = mdev;
+		cl->mdevs[used] = mdev;
 		err = linlondp_dpu_add_graph_slaves(dev, &match, mdev->dev);
 		if (err)
 			return err;
+		used++;
 	}
 
-	cl->n_mdevs = n;
+	if (!used)
+		return dev_err_probe(dev, -ENODEV,
+				     "no available dpu in cluster\n");
+
+	if (used != n)
+		dev_warn(dev, "cluster degraded: %d/%d dpu available\n", used, n);
+
+	cl->n_mdevs = used;
 	dev_set_drvdata(dev, cl);
 
 	return component_master_add_with_match(dev, &linlondp_cluster_master_ops,
