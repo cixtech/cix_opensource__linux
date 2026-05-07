@@ -131,6 +131,34 @@ bool trilin_dp_plugged_status(struct trilin_dp *dp)
 	return (dp->status == connector_status_connected);
 }
 
+/* SST: match dp_panel.source_id to Linlon master pipeline id (pipe 0/1). */
+static void trilin_dp_sst_sync_source_id_from_crtc(struct trilin_dp *dp,
+						   struct drm_crtc *crtc)
+{
+	struct linlondp_crtc *kcrtc;
+	u32 src;
+
+	if (!dp || dp->mst.mst_active || !crtc)
+		return;
+
+	kcrtc = to_kcrtc(crtc);
+	if (!kcrtc->master)
+		return;
+
+	src = (u32)kcrtc->master->id;
+	if (src >= dp->max_streams) {
+		DP_ERR("master pipeline id %u >= max_streams %u\n", src,
+		       dp->max_streams);
+		return;
+	}
+
+	if (dp->dp_panel.source_id != src) {
+		DP_INFO("SST dp_panel.source_id %u -> %u (CRTC master pipeline)\n",
+			dp->dp_panel.source_id, src);
+		dp->dp_panel.source_id = src;
+	}
+}
+
 static int trilin_dp_connector_atomic_check(struct drm_connector *conn,
 					    struct drm_atomic_state *state)
 {
@@ -155,6 +183,12 @@ static int trilin_dp_connector_atomic_check(struct drm_connector *conn,
 
 	if (!crtc)
 		return 0;
+
+	/*
+	 * atomic_check 里可见 new_con_state->crtc；drm 在 update_connector_routing
+	 * 里调 .best_encoder 时 connector->state 往往仍是旧状态，故在此再同步一次。
+	 */
+	trilin_dp_sst_sync_source_id_from_crtc(dp, crtc);
 
 	if (dp->caps.psr_sink_support && dp->psr_config_on)
 		new_con_state->self_refresh_aware = true;
@@ -358,8 +392,16 @@ static struct drm_encoder *
 trilin_dp_connector_best_encoder(struct drm_connector *connector)
 {
 	struct trilin_dp *dp = connector_to_dp(connector);
+	struct drm_connector_state *conn_st = connector->state;
 
 	DP_DEBUG("enter\n");
+
+	if (conn_st && conn_st->best_encoder)
+		return conn_st->best_encoder;
+
+	trilin_dp_sst_sync_source_id_from_crtc(dp,
+					       conn_st ? conn_st->crtc : NULL);
+
 	return &dp->encoder.base;
 }
 
