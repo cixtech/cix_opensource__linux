@@ -1011,8 +1011,13 @@ static int rx8900_suspend(struct device *dev)
 	}
 	cur_secs = rtc_tm_to_time64(&tm);
 	alarm_secs = rtc_tm_to_time64(&rx8900->last_alarm_time);
-	if (seconds_alarm_values <= 0 || cur_secs >= alarm_secs)
+	if (seconds_alarm_values <= 0)
 		return 0;
+
+	if (cur_secs >= alarm_secs && !g_test_wake_time) {
+		dev_warn(&client->dev, "RTC alarm timer has already passed\n");
+		return 0;
+	}
 
 	if (seconds_alarm_values >= RX8900_FIE_MAX_TIME) {
 		err = rx8900_read_reg(client, RX8900_BTC_CTRL, &ctrlreg);
