@@ -3808,6 +3808,11 @@
 					hysteresis = <1000>;
 					type = "passive";
 				};
+				trip-point-2 {
+					temperature = <98000>;
+					hysteresis = <0>;
+					type = "critical";
+				};
 			};
 		};
 
@@ -3826,6 +3831,11 @@
 					temperature = <95000>;
 					hysteresis = <1000>;
 					type = "passive";
+				};
+				trip-point-2 {
+					temperature = <98000>;
+					hysteresis = <0>;
+					type = "critical";
 				};
 			};
 		};
@@ -3961,6 +3971,12 @@
 					temperature = <85000>;
 					hysteresis = <1000>;
 					type = "passive";
+				};
+
+				crit:trip-point-2 {
+					temperature = <98000>;
+					hysteresis = <0>;
+					type = "critical";
 				};
 			};
 
