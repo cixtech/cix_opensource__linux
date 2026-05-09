@@ -101,7 +101,7 @@
 		pinctrl-names = "default","gpio";
 		pinctrl-0 = <&pinctrl_lt7911_hw>;
 		pinctrl-1 = <&pinctrl_lt7911_hw>;
-		pwdn-gpios = <&fch_gpio0 15 GPIO_ACTIVE_HIGH>;
+		pwdn-gpios = <&fch_gpio1 15 GPIO_ACTIVE_HIGH>;
 		power-gpios = <&fch_gpio1 16 GPIO_ACTIVE_HIGH>;
 		power1-gpios = <&fch_gpio1 18 GPIO_ACTIVE_HIGH>;
 		reset-gpios = <&fch_gpio1 12 GPIO_ACTIVE_HIGH>;
