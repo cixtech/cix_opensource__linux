@@ -103,6 +103,46 @@ u32 trilin_phy_read(struct trilin_dp *dp, int offset)
 	return readl(dp->phy_iomem + offset);
 }
 
+static bool trilin_dp_lane_count_valid(u8 lane_cnt)
+{
+	return lane_cnt == 1 || lane_cnt == 2 || lane_cnt == 4;
+}
+
+bool trilin_dp_link_trained(struct trilin_dp *dp)
+{
+	u8 link_status[DP_LINK_STATUS_SIZE];
+	int ret;
+	u8 lane_cnt;
+
+	mutex_lock(&dp->session_lock);
+	ret = drm_dp_dpcd_read_link_status(&dp->aux, link_status);
+	if (ret != DP_LINK_STATUS_SIZE) {
+		DP_INFO("read link_status failed (%d), need retrain\n", ret);
+		mutex_unlock(&dp->session_lock);
+		return false;
+	}
+
+	lane_cnt = trilin_dp_read(dp, TRILIN_DPTX_LANE_COUNT_SET) & 0x1f;
+	mutex_unlock(&dp->session_lock);
+
+	if (!trilin_dp_lane_count_valid(lane_cnt)) {
+		DP_INFO("invalid lane count %u, need retrain\n", lane_cnt);
+		return false;
+	}
+
+	if (!drm_dp_clock_recovery_ok(link_status, lane_cnt)) {
+		DP_INFO("clock recovery not ok, need retrain\n");
+		return false;
+	}
+
+	if (!drm_dp_channel_eq_ok(link_status, lane_cnt)) {
+		DP_INFO("channel eq not ok, need retrain\n");
+		return false;
+	}
+
+	return true;
+}
+
 struct trilin_encoder *encoder_to_trilin(struct drm_encoder *encoder)
 {
 	return container_of(encoder, struct trilin_encoder, base);

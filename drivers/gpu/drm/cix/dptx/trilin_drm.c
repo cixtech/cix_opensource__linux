@@ -689,7 +689,8 @@ static void trilin_dp_encoder_enable(struct drm_encoder *encoder,
 	DP_INFO("enter\n");
 
 	if (dp->enabled_by_gop) {
-		if (is_same_mode_compare(dp, dp_panel) && !conn->vrr.enable) {
+		if (is_same_mode_compare(dp, dp_panel) && !conn->vrr.enable &&
+		    trilin_dp_link_trained(dp)) {
 			trilin_dp_write(dp, TRILIN_DPTX_INTERRUPT_MASK,
 					TRILIN_DPTX_INTERRUPT_CFG);
 		} else {
