@@ -58,6 +58,7 @@
 #define LTSSM_TRANS_DEBUG_CTRL_REG3 (CDNS_PCIE_IP_REG_BANK_BASE + 0x6d8)
 #define LTSSM_TRANS_DEBUG_CTRL_STATUS (CDNS_PCIE_IP_REG_BANK_BASE + 0x6dc)
 #define AXI_SLAVE_CTRL (CDNS_PCIE_IP_AXI_SLAVE_BASE + 0x4)
+#define AXI_SLAVE_RESP_CTRL_MEM (CDNS_PCIE_IP_AXI_SLAVE_BASE + 0x10c)
 
 #define BF_MAX_LANE_NUM_MASK GENMASK(17, 15)
 #define MAX_EVAL_ITER_SHIFT 18
@@ -1849,6 +1850,7 @@ static void sky1_pcie_filter_msg(struct sky1_pcie *pcie)
 
 static void sky1_pcie_init(struct sky1_pcie *pcie)
 {
+	u32 val = 0;
 	struct device *dev = pcie->dev;
 
 	dev_dbg(dev, "%s, %i\n", __func__, __LINE__);
@@ -1873,6 +1875,13 @@ static void sky1_pcie_init(struct sky1_pcie *pcie)
 
 	// Enable PCLK Rate override
 	writel(0x80000688, (pcie->reg_base + I_CFG_9));
+
+	// Set AXI Slave Response Control for Completion Status errors:
+	// resp_cpl_status (bit0-1) = 0x0 (OKAY), instead of default 0x2 (SLVERR)
+	val = cdns_pcie_readl(pcie->cdns_pcie, AXI_SLAVE_RESP_CTRL_MEM);
+	val &= ~GENMASK(1, 0);
+	cdns_pcie_writel(pcie->cdns_pcie, AXI_SLAVE_RESP_CTRL_MEM, val);
+
 	dev_dbg(dev, "%s, %i\n", __func__, __LINE__);
 }
 
