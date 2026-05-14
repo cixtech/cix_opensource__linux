@@ -2831,9 +2831,10 @@ int trilin_dp_pm_resume_early(struct trilin_dp *dp)
 	struct drm_connector_state *conn_state;
 	struct drm_connector *conn;
 	int ret, i;
+
 	DP_INFO("enter");
 
-	if(IS_ERR(old_state)) {
+	if (IS_ERR(old_state)) {
 		DP_ERR("old state err");
 		return PTR_ERR(old_state);
 	}
@@ -2872,6 +2873,9 @@ state_put:
 		drm_atomic_state_put(new_state);
 unlock:
 	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
+	/* notify disconnected status */
+	drm_kms_helper_connector_hotplug_event(connector);
+
 	return ret;
 }
 
