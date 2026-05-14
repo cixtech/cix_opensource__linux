@@ -907,6 +907,16 @@ pinctrl_gmac1: pinctrl_gmac1 {
 		>;
 	};
 
+	pinctrl_ov5645_hw: pinctrl_ov5645_hw {
+		sky1,pins = <
+			CIX_PAD_CSI0_MCLK0_FUNC_CSI0_MCLK0		(PULL_DOWN|ST|DS_LEVEL12)	//mclk0
+			CIX_PAD_CSI0_MCLK1_FUNC_CSI0_MCLK1		(PULL_DOWN|ST|DS_LEVEL12)	//mclk1
+			CIX_PAD_I2S3_DATA_IN1_FUNC_GPIO087 		(DS_LEVEL12)			//cam0 reset
+			CIX_PAD_GPIO090_FUNC_GPIO090 	   		(DS_LEVEL12)			//cam0 pwdn
+			CIX_PAD_GPIO093_FUNC_GPIO093			(ST|DS_LEVEL12)			//cam1 pwen
+		>;
+	};
+
 	pinctrl_cam_power_0: pinctrl_cam_power_0 {
 		sky1,pins = <
 			CIX_PAD_GPIO091_FUNC_GPIO091 (DS_LEVEL12)

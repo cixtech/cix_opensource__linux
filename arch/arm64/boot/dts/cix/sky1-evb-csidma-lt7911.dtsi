@@ -2,8 +2,15 @@
 /*
  * Copyright 2024 Cix Technology Group Co., Ltd.
  */
+
+#include "sky1-csidma-common.dtsi"
+
+#define PLATFORM_ID  PLATFORM_A0_SOC
+
 &cix_dma_dev_0 {
 	sync = <0>;
+	channel_id = <0>;
+	dphy_mode = <0>; /*for full left 4lane mode*/
 	cix,rcsu = <&cix_csi_rcsu_0>;
 	cix,hw = <&cix_bridge_0>;
 	status = "okay";
@@ -16,6 +23,7 @@
 };
 
 &cix_csi_rcsu_0 {
+	platform-id = <PLATFORM_ID>;
 	status = "okay";
 };
 
@@ -29,7 +37,9 @@
 };
 
 &cix_mipi_virt_csi_00 {
+	cix,hw = <&cix_mipi_csi_0>;
 	status = "okay";
+	vc = <0>;
 	ports {
 		#address-cells = <1>;
 		#size-cells = <0>;

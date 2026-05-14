@@ -47,12 +47,19 @@
 		cix-csi2-virt0 = &cix_mipi_virt_csi_00;
 		cix-csi2-virt1 = &cix_mipi_virt_csi_01;
 		cix-csi2-virt2 = &cix_mipi_virt_csi_02;
+		cix-csi2-virt3 = &cix_mipi_virt_csi_03;
+		cix-csi2-virt4 = &cix_mipi_virt_csi_04;
+		cix-csi2-virt5 = &cix_mipi_virt_csi_05;
+		cix-csi2-virt6 = &cix_mipi_virt_csi_06;
+		cix-csi2-virt7 = &cix_mipi_virt_csi_07;
 		cix-dphy0 = &cix_dphy_0;
 		cix-dphy1 = &cix_dphy_1;
 		cix-dphy2 = &cix_dphy_2;
 		cix-dphy3 = &cix_dphy_3;
 		cix-dphy4 = &cix_dphy_4;
 		cix-dphy5 = &cix_dphy_5;
+		cix-dphy6 = &cix_dphy_6;
+		cix-dphy7 = &cix_dphy_7;
 		cix-dphy-hw0 = &cix_dphy_hw_0;
 		cix-dphy-hw1 = &cix_dphy_hw_1;
 		pcie_rc0 = &pcie_x8_rc;
@@ -441,6 +448,12 @@
 			compatible = "shared-dma-pool";
 			no-map;
 			reg = <0x0 0x90000000 0x0 0x20000000>;
+		};
+
+		csi_dma_res_mem: csi_dma_res_mem@100000000 {
+			compatible = "shared-dma-pool";
+			no-map;
+			reg = <0x1 0x00000000 0x0 0x19000000>;
 		};
 
 		mali_protected: mali_protected@bce00000 {
@@ -3310,7 +3323,7 @@
 		};
 
 		cix_mipi_csi_1: csi@14290000 {
-			compatible = "cix,cix-mipi-csi2";
+			compatible = "cix,cix-mipi-csi2-hw";
 			#address-cells = <2>;
 			#size-cells = <2>;
 			clocks = <&scmi_clk CLK_TREE_CSI_CTRL1_PCLK>,
@@ -3326,7 +3339,7 @@
 		};
 
 		cix_mipi_csi_2: csi@142E0000 {
-			compatible = "cix,cix-mipi-csi2";
+			compatible = "cix,cix-mipi-csi2-hw";
 			#address-cells = <2>;
 			#size-cells = <2>;
 			clocks = <&scmi_clk CLK_TREE_CSI_CTRL2_PCLK>,
@@ -3347,7 +3360,7 @@
 		};
 
 		cix_mipi_csi_3: csi@142F0000 {
-			compatible = "cix,cix-mipi-csi2";
+			compatible = "cix,cix-mipi-csi2-hw";
 			#address-cells = <2>;
 			#size-cells = <2>;
 			clocks = <&scmi_clk CLK_TREE_CSI_CTRL3_PCLK>,
@@ -3364,19 +3377,41 @@
 
 		cix_mipi_virt_csi_00: cix_mipi_virt_csi_00 {
 		      compatible = "cix,cix-mipi-csi2";
-		      cix,hw = <&cix_mipi_csi_0>;
 		      status = "disabled";
 		};
 
 		cix_mipi_virt_csi_01: cix_mipi_virt_csi_01 {
 		      compatible = "cix,cix-mipi-csi2";
-		      cix,hw = <&cix_mipi_csi_0>;
 		      status = "disabled";
 		};
 
 		cix_mipi_virt_csi_02: cix_mipi_virt_csi_02 {
 		      compatible = "cix,cix-mipi-csi2";
-		      cix,hw = <&cix_mipi_csi_0>;
+		      status = "disabled";
+		};
+
+		cix_mipi_virt_csi_03: cix_mipi_virt_csi_03 {
+		      compatible = "cix,cix-mipi-csi2";
+		      status = "disabled";
+		};
+
+		cix_mipi_virt_csi_04: cix_mipi_virt_csi_04 {
+		      compatible = "cix,cix-mipi-csi2";
+		      status = "disabled";
+		};
+
+		cix_mipi_virt_csi_05: cix_mipi_virt_csi_05 {
+		      compatible = "cix,cix-mipi-csi2";
+		      status = "disabled";
+		};
+
+		cix_mipi_virt_csi_06: cix_mipi_virt_csi_06 {
+		      compatible = "cix,cix-mipi-csi2";
+		      status = "disabled";
+		};
+
+		cix_mipi_virt_csi_07: cix_mipi_virt_csi_07 {
+		      compatible = "cix,cix-mipi-csi2";
 		      status = "disabled";
 		};
 
@@ -3400,7 +3435,7 @@
 
 		cix_dphy_3: cix_dph_3 {
 			compatible = "cix,cix-mipi-dphy-rx";
-			cix,hw = <&cix_dphy_hw_1>;
+			cix,hw = <&cix_dphy_hw_0>;
 			status = "disabled";
 		};
 
@@ -3411,6 +3446,18 @@
 		};
 
 		cix_dphy_5: cix_dph_5 {
+			compatible = "cix,cix-mipi-dphy-rx";
+			cix,hw = <&cix_dphy_hw_1>;
+			status = "disabled";
+		};
+
+		cix_dphy_6: cix_dph_6 {
+			compatible = "cix,cix-mipi-dphy-rx";
+			cix,hw = <&cix_dphy_hw_1>;
+			status = "disabled";
+		};
+
+		cix_dphy_7: cix_dph_7 {
 			compatible = "cix,cix-mipi-dphy-rx";
 			cix,hw = <&cix_dphy_hw_1>;
 			status = "disabled";

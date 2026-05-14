@@ -1,0 +1,58 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright 2024 Cix Technology Group Co., Ltd.
+ */
+
+#define DEFINE_TWO_ENDPOINT(label,remote_ph) \
+	label: endpoint {                               \
+		remote-endpoint = <&remote_ph>;         \
+	}
+
+#define DEFINE_TWO_WITH_SENSOR_ENDPOINT(label,remote_ph) \
+	label: endpoint {                               \
+		remote-endpoint = <&remote_ph>;         \
+		data-lanes = <4>;			\
+		clock-lanes = <0>;			\
+	}
+
+#define DEFINE_FOUR_ENDPOINT(label, addr, reg_val, remote_ph) \
+	label: endpoint@addr {                               \
+		reg = <reg_val>;                             \
+		remote-endpoint = <&remote_ph>;              \
+	}
+
+#define DEFINE_FOUR_DPHY_IN_ENDPOINT(label, addr, reg_val, remote_ph) \
+	label: endpoint@addr {                          \
+		reg = <reg_val>;                        \
+		remote-endpoint = <&remote_ph>;         \
+		data-lanes = <1 2 3 4>;			\
+		clock-lanes = <0>;			\
+	}
+
+#define DEFINE_PORT_WITH_ENDPOINT(port_id, port_reg,endpoint) \
+	port@port_id {                                        \
+		reg = <port_reg>;                             \
+		#address-cells = <1>;                         \
+		#size-cells = <0>;                            \
+		endpoint;				      \
+	}
+
+#define CIX_PLATFORM_SUB_ID_SOC		(1)
+#define CIX_PLATFORM_SUB_ID_EMU		(2)
+#define CIX_PLATFORM_SUB_ID_FPGA	(4)
+
+#define CIX_PLATFORM_ID_A0		(1 << 8)
+#define CIX_PLATFORM_ID_B2		(1 << 9)
+#define CIX_PLATFORM_ID_START1		(1 << 10)
+
+#define PLATFORM_A0_SOC		(CIX_PLATFORM_ID_A0 | CIX_PLATFORM_SUB_ID_SOC)
+#define PLATFORM_A0_EMU		(CIX_PLATFORM_ID_A0 | CIX_PLATFORM_SUB_ID_EMU)
+#define PLATFORM_A0_FPGA	(CIX_PLATFORM_ID_A0 | CIX_PLATFORM_SUB_ID_FPGA)
+
+#define PLATFORM_B2_SOC		(CIX_PLATFORM_ID_B2 | CIX_PLATFORM_SUB_ID_SOC)
+#define PLATFORM_B2_EMU		(CIX_PLATFORM_ID_B2 | CIX_PLATFORM_SUB_ID_EMU)
+#define PLATFORM_B2_FPGA	(CIX_PLATFORM_ID_B2 | CIX_PLATFORM_SUB_ID_FPGA)
+
+#define PLATFORM_STAT1_SOC	(CIX_PLATFORM_ID_START1 | CIX_PLATFORM_SUB_ID_SOC)
+#define PLATFORM_STAT1_EMU	(CIX_PLATFORM_ID_START1 | CIX_PLATFORM_SUB_ID_EMU)
+#define PLATFORM_STAT1_FPGA	(CIX_PLATFORM_ID_START1 | CIX_PLATFORM_SUB_ID_FPGA)

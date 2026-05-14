@@ -1,0 +1,145 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright 2024 Cix Technology Group Co., Ltd.
+ */
+
+#include "sky1-csidma-common.dtsi"
+
+#define PLATFORM_ID  PLATFORM_A0_SOC
+
+&cix_dma_dev_0 {
+	sync = <0>;
+	channel_id = <1>;
+	dphy_mode = <2>; /*for split mode*/
+	cix,rcsu = <&cix_csi_rcsu_0>;
+	cix,hw = <&cix_bridge_0>;
+	status = "okay";
+	iommus = <&smmu_mmhub 0x21>;
+	port {
+		cix_dma_dev_0_in: endpoint {
+			remote-endpoint = <&mipi_csi2_virt04_out>;
+		};
+	};
+};
+
+&cix_csi_rcsu_0 {
+	platform-id = <PLATFORM_ID>;
+	status = "okay";
+};
+
+&cix_bridge_0 {
+	status = "okay";
+};
+
+&cix_mipi_csi_1 {
+	lanes = <2>;
+	status = "okay";
+};
+
+&cix_mipi_virt_csi_04 {
+	cix,hw = <&cix_mipi_csi_1>;
+	status = "okay";
+	vc = <0>;
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			mipi_csi2_virt04_in: endpoint@1 {
+				reg = <1>;
+				remote-endpoint = <&dphy0_out>;
+			};
+		};
+		port@1 {
+			reg = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			mipi_csi2_virt04_out: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&cix_dma_dev_0_in>;
+			};
+		};
+	};
+};
+
+&cix_dphy_hw_0 {
+	status = "okay";
+};
+
+&cix_dphy_0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			dphy0_in: endpoint@1 {
+				reg = <1>;
+				remote-endpoint = <&ov5645_out>;
+				data-lanes = <1 2>;
+				clock-lanes = <0>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			dphy0_out: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&mipi_csi2_virt04_in>;
+			};
+		};
+	};
+};
+
+/*
+ * Standalone power-management node for the OV5645 sensor module.
+ *
+ * The companion platform driver (drivers/media/i2c/cix/ov5645/
+ * ov5645_power_manage.c, compatible "ovti,ov5645-power") owns the
+ * pwdn / reset / power GPIOs and the pinctrl default state, and exposes
+ * a small power_on/power_off API to the I2C sensor driver.
+ *
+ * The OV5645 I2C node references this node through the
+ * "ov5645,power-mgr" phandle below.
+ */
+/ {
+	ov5645_pwr: ov5645-power {
+		compatible = "ovti,ov5645-power";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_ov5645_hw>;
+		pwdn-gpios = <&fch_gpio1 19 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&fch_gpio1 17 GPIO_ACTIVE_LOW>;
+		power-gpios = <&fch_gpio1 18 GPIO_ACTIVE_HIGH>;	// GPIO93:fch_gpio1 18
+		status = "okay";
+	};
+};
+
+&i2c3 {
+	status = "okay";
+	ov5645: ov5645@3c {
+		compatible = "ovti,ov5645";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x3c>;
+		clock-names = "mclk";
+		clocks = <&scmi_clk CLK_TREE_CAMERA_MCLK1>;
+		clock-frequency = <24000000>;
+		ov5645,power-mgr = <&ov5645_pwr>;
+		status = "okay";
+		port {
+			ov5645_out: endpoint {
+				remote-endpoint = <&dphy0_in>;
+				data-lanes = <1 2>;
+				clock-lanes = <0>;
+			};
+		};
+	};
+};

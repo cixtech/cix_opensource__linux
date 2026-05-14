@@ -21,6 +21,7 @@ dtb-$(CONFIG_ARCH_CIX) += sky1-evb-pciex2.dtb
 dtb-$(CONFIG_ARCH_CIX) += sky1-evb-pciex10.dtb
 dtb-$(CONFIG_ARCH_CIX) += sky1-evb-pciex11.dtb
 dtb-$(CONFIG_ARCH_CIX) += sky1-evb-pcie_width_x1.dtb
+dtb-$(CONFIG_ARCH_CIX) += sky1-evb-csidma-ov5645.dtb
 dtb-$(CONFIG_ARCH_CIX) += sky1-evb-pcie_width_x2.dtb
 dtb-$(CONFIG_ARCH_CIX) += sky1-evb-pcie_width_x4.dtb
 dtb-$(CONFIG_ARCH_CIX) += sky1-evb-isp.dtb
