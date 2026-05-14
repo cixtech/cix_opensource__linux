@@ -27,7 +27,7 @@
 #include <linux/of_platform.h>
 #include <linux/clk-provider.h>
 #include <linux/platform_device.h>
-
+#include <linux/debugfs.h>
 #include <media/v4l2-async.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-event.h>
@@ -45,6 +45,24 @@
 #define CIX_PLATFORM_SOC	(0)
 #define CIX_PLATFORM_EMU	(1)
 #define CIX_PLATFORM_FPGA	(2)
+
+#define CIX_PLATFORM_SUB_ID_SOC		(1)
+#define CIX_PLATFORM_SUB_ID_EMU		(2)
+#define CIX_PLATFORM_SUB_ID_FPGA	(4)
+
+#define CIX_PLATFORM_ID_A0		(1 << 8)
+#define CIX_PLATFORM_ID_B2		(1 << 9)
+#define CIX_PLATFORM_ID_START1		(1 << 10)
+
+#define CIX_PLATFORM_ID_A0_MASK		(1 << 8)
+#define CIX_PLATFORM_ID_B2_MASK		(1 << 9)
+#define CIX_PLATFORM_ID_START1_MASK	(1 << 10)
+
+#ifdef CONFIG_ARCH_CIX_EMU
+#define CIX_PLATFORM_ID CIX_PLATFORM_EMU
+#else
+#define CIX_PLATFORM_ID CIX_PLATFORM_SOC
+#endif
 
 /* CIX Media Device & Subdev's Name */
 #define CIX_MD_DRIVER_NAME		"cix-md"
@@ -65,12 +83,12 @@
 #define CSI_DMA_CAPTURE_NAME		"cix-cap"
 
 
-#define CIX_DMA_DEV_MAX_DEVS	4
-#define CIX_BRIDGE_MAX_DEVS	4
+#define CIX_DMA_DEV_MAX_DEVS	16
+#define CIX_BRIDGE_MAX_DEVS	16
 #define CIX_SENSORS_MAX_DEVS	2
 #define CIX_MIPI_CSI2_MAX_DEVS	4
 #define CIX_MIPI_DPHY_MAX_DEVS	2
-#define CIX_MIPI_DPHY_RX_MAX_DEVS	6
+#define CIX_MIPI_DPHY_RX_MAX_DEVS	(16)
 
 #define CIX_NAME_LENS 32
 
@@ -336,6 +354,11 @@ enum dphy_rx_pads {
 	DPHY_RX_PAD_MAX,
 };
 
+#define DPHY_LEFT_CLOCK_4_LANES	(0)
+#define DPHY_LEFT_CLOCK_RIGHT_2_LANES	(1)/*split mode*/
+#define DPHY_LEFT_CLOCK_LEFT_2_LANES	(2)/*split mode*/
+#define DPHY_RIGHT_CLOCK_4_LANES	(3)
+
 struct dphy_hw {
 	struct platform_device *pdev;
 	void __iomem *regs;
@@ -346,9 +369,15 @@ struct dphy_hw {
 	struct reset_control *phy_cmnrst;
 	const void *drv_data;
 	struct mutex mutex;
+	int platform_id;
 	atomic_t stream_cnt;
 	u8 num_lanes;
 	u8 id;
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+	struct dentry *debugfs_root;
+	/* more than 0: override stream_on lane_rate; 0: use pipeline value */
+	u32 force_lane_rate;
+#endif
 };
 
 struct dphy_rx {
@@ -427,7 +456,7 @@ struct mipi_csi2_hw {
 	struct	reset_control *reset;
 	atomic_t stream_cnt;
 	u8	platform_id;
-	u8 id;
+	int id;
 };
 
 struct mipi_csi2_hw_drv_data {
@@ -453,8 +482,8 @@ struct csi2rx_priv {
 	struct v4l2_mbus_framefmt	format;
 	u8	stream_on;
 	u8	hw_stream_id; /*which hardware stream is request,calculate from id*/
-	u8	virtual_chan_id; /*which virtaul channel hw stream request,get from dts todo*/
-	u8	id;
+	int	virtual_chan_id; /*which virtaul channel hw stream request,get from dts todo*/
+	int	id;
 	u8	num_lanes;
 	int	source_pad;
 	u16	sys_clk_freq;
@@ -602,10 +631,14 @@ struct csi_dma_hw_dev {
 	spinlock_t slock;
 	u32 axi_uid;
 	int id;
+	int platform_id;
 	u16 sys_clk_freq;
 	u32 status;
 	void (*callback)(void *data);
 	void *data;
+#ifdef CONFIG_PLAT_DSM_SYSEVENT
+	struct dsm_client *csi_dsm_client;
+#endif
 };
 
 struct csi_bridge_hw_drv_data {
@@ -632,12 +665,15 @@ struct csi_dma_dev {
 	struct media_device media_dev;
 	struct v4l2_async_notifier notifier;
 	struct csi_dma_pipeline pipe;
+	int platform_id;
 	struct mutex lock;
 	spinlock_t slock;
 	u8 chain_buf;
 	u32 status;
 	u32 stream_on;
 	int id;
+	int rcsu_channel_sel;
+	int rcsu_dphy_mode;
 	unsigned int is_streaming;
 	bool cap_enabled;
 	bool buf_active_reverse;

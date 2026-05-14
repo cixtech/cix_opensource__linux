@@ -22,6 +22,9 @@
 #include <linux/spinlock.h>
 #include <linux/pm_domain.h>
 #include <linux/iopoll.h>
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+#include <linux/debugfs.h>
+#endif
 #include "csi_common.h"
 
 #define CIX_MIPI_DPHY_HW_DRIVER_NAME "cix-mipi-dphy-hw"
@@ -29,6 +32,30 @@
 
 static int mipi_dphy_hw_dev_resume(struct dphy_rx *dphy);
 static int mipi_dphy_hw_dev_suspend(struct dphy_rx *dphy);
+
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+static void mipi_dphy_hw_debugfs_init(struct dphy_hw *dphy)
+{
+	char dir_name[32];
+
+	snprintf(dir_name, sizeof(dir_name), "cix_dphy_hw.%u", dphy->id);
+	dphy->debugfs_root = debugfs_create_dir(dir_name, NULL);
+	if (IS_ERR_OR_NULL(dphy->debugfs_root)) {
+		dphy->debugfs_root = NULL;
+		dev_warn(dphy->dev, "failed to create debugfs dir\n");
+		return;
+	}
+
+	debugfs_create_u32("force_lane_rate", 0600, dphy->debugfs_root,
+			   &dphy->force_lane_rate);
+}
+
+static void mipi_dphy_hw_debugfs_deinit(struct dphy_hw *dphy)
+{
+	debugfs_remove_recursive(dphy->debugfs_root);
+	dphy->debugfs_root = NULL;
+}
+#endif
 
 struct phy_config {
 	unsigned int offset;
@@ -394,11 +421,28 @@ static int csi2_dphy_hw_stream_on(struct dphy_rx *dphy, unsigned int id,
 	struct dphy_hw *hw = dphy->dphy_hw;
 	struct device *dev = dphy->dev;
 
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+	if (hw->force_lane_rate) {
+		unsigned int req_lane_rate = lane_rate;
+
+		lane_rate = hw->force_lane_rate*1000000;
+		dev_info(dev,
+			 "force lane_rate: req=%u override=%u dphy id=%u\n",
+			 req_lane_rate, lane_rate, id);
+	}
+#endif
+
 	mutex_lock(&hw->mutex);
+
 	/*here we need config the full mode or split mode on depend on the id */
 
 	dev_info(dev, "virtual dphy id %d stream on enter\n", id);
-	mipi_dphy_config(dphy, lane_rate);
+
+	if(hw->platform_id == CIX_PLATFORM_SOC) {
+		if (atomic_read(&hw->stream_cnt) == 0)
+			mipi_dphy_config(dphy, lane_rate);
+	}
+
 	atomic_inc(&hw->stream_cnt);
 	/*low power*/
 	mutex_unlock(&hw->mutex);
@@ -415,7 +459,9 @@ static int csi2_dphy_hw_stream_off(struct dphy_rx *dphy, unsigned int id)
 	/*here we need config the full mode or split mode off depend on the id */
 
 	dev_info(dev, "virtual dphy id %d stream off enter\n", id);
-	atomic_dec(&hw->stream_cnt);
+
+	if (atomic_read(&hw->stream_cnt) > 0)
+		atomic_dec(&hw->stream_cnt);
 
 	/*low power*/
 	mutex_unlock(&hw->mutex);
@@ -450,31 +496,33 @@ static int mipi_dphy_hw_parse(struct dphy_hw *dphy)
 		return -EINVAL;
 	}
 
-	/*get the clk & reset*/
-	dphy->psm_clk = devm_clk_get_optional(dev, "phy_psmclk");
-	if (IS_ERR(dphy->psm_clk)) {
-		dev_err(dev, "Couldn't get phy_psmclk clock\n");
-		return PTR_ERR(dphy->psm_clk);
-	}
+	if(dphy->platform_id == CIX_PLATFORM_SOC) {
+		/*get the clk & reset*/
+		dphy->psm_clk = devm_clk_get_optional(dev, "phy_psmclk");
+		if (IS_ERR(dphy->psm_clk)) {
+			dev_err(dev, "Couldn't get phy_psmclk clock\n");
+			return PTR_ERR(dphy->psm_clk);
+		}
 
-	dphy->apb_clk = devm_clk_get_optional(dev, "phy_apbclk");
-	if (IS_ERR(dphy->apb_clk)) {
-		dev_err(dev, "Couldn't get phy_apbclk clock\n");
-		return PTR_ERR(dphy->apb_clk);
-	}
+		dphy->apb_clk = devm_clk_get_optional(dev, "phy_apbclk");
+		if (IS_ERR(dphy->apb_clk)) {
+			dev_err(dev, "Couldn't get phy_apbclk clock\n");
+			return PTR_ERR(dphy->apb_clk);
+		}
 
-	dphy->rst_dphy =
-		devm_reset_control_get_optional_shared(dev, "phy_prst");
-	if (IS_ERR(dphy->rst_dphy)) {
-		dev_err(dev, "failed to get reset phy_prst\n");
-		return PTR_ERR(dphy->rst_dphy);
-	}
+		dphy->rst_dphy =
+			devm_reset_control_get_optional_shared(dev, "phy_prst");
+		if (IS_ERR(dphy->rst_dphy)) {
+			dev_err(dev, "failed to get reset phy_prst\n");
+			return PTR_ERR(dphy->rst_dphy);
+		}
 
-	dphy->phy_cmnrst =
-		devm_reset_control_get_optional_shared(dev, "phy_cmnrst");
-	if (IS_ERR(dphy->rst_dphy)) {
-		dev_err(dev, "failed to get reset phy_cmnrst\n");
-		return PTR_ERR(dphy->rst_dphy);
+		dphy->phy_cmnrst =
+			devm_reset_control_get_optional_shared(dev, "phy_cmnrst");
+		if (IS_ERR(dphy->rst_dphy)) {
+			dev_err(dev, "failed to get reset phy_cmnrst\n");
+			return PTR_ERR(dphy->rst_dphy);
+		}
 	}
 
 	return 0;
@@ -508,15 +556,24 @@ static int mipi_dphy_hw_probe(struct platform_device *pdev)
 
 	dphy->dev = dev;
 	dphy->pdev = pdev;
+	dphy->platform_id = CIX_PLATFORM_ID;
+
+	atomic_set(&dphy->stream_cnt, 0);
+
 	dphy->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(dphy->regs))
 		return PTR_ERR(dphy->regs);
 
 	dphy->drv_data = device_get_match_data(dev);
 
-	mipi_dphy_hw_parse(dphy);
+	ret = mipi_dphy_hw_parse(dphy);
+	if (ret)
+		return ret;
 
 	mutex_init(&dphy->mutex);
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+	mipi_dphy_hw_debugfs_init(dphy);
+#endif
 
 	platform_set_drvdata(pdev, dphy);
 
@@ -529,8 +586,12 @@ static int mipi_dphy_hw_probe(struct platform_device *pdev)
 static int mipi_dphy_hw_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct dphy_hw *dphy = platform_get_drvdata(pdev);
 
 	dev_info(dev, "mipi-dphy hw remove enter\n");
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+	mipi_dphy_hw_debugfs_deinit(dphy);
+#endif
 	return 0;
 }
 
@@ -539,14 +600,16 @@ static int mipi_dphy_hw_dev_suspend(struct dphy_rx *dphy_rx)
 {
 	struct dphy_hw *dphy = dphy_rx->dphy_hw;
 
-	if (!dphy->rst_dphy || !dphy->phy_cmnrst || !dphy->psm_clk ||
-	    !dphy->apb_clk)
-		return -EINVAL;
+	if(dphy->platform_id == CIX_PLATFORM_SOC) {
+		if (!dphy->rst_dphy || !dphy->phy_cmnrst || !dphy->psm_clk ||
+				!dphy->apb_clk)
+			return -EINVAL;
 
-	reset_control_assert(dphy->rst_dphy);
-	reset_control_assert(dphy->phy_cmnrst);
-	clk_disable_unprepare(dphy->psm_clk);
-	clk_disable_unprepare(dphy->apb_clk);
+		reset_control_assert(dphy->rst_dphy);
+		reset_control_assert(dphy->phy_cmnrst);
+		clk_disable_unprepare(dphy->psm_clk);
+		clk_disable_unprepare(dphy->apb_clk);
+	}
 
 	return 0;
 }
@@ -556,24 +619,26 @@ static int mipi_dphy_hw_dev_resume(struct dphy_rx *dphy_rx)
 	struct dphy_hw *dphy = dphy_rx->dphy_hw;
 	int ret;
 
-	if (!dphy->rst_dphy || !dphy->phy_cmnrst || !dphy->psm_clk ||
-	    !dphy->apb_clk)
-		return -EINVAL;
+	if(dphy->platform_id == CIX_PLATFORM_SOC) {
+		if (!dphy->rst_dphy || !dphy->phy_cmnrst || !dphy->psm_clk ||
+				!dphy->apb_clk)
+			return -EINVAL;
 
-	ret = clk_prepare_enable(dphy->psm_clk);
-	if (ret < 0) {
-		dev_err(dphy->dev, "%s, enable psm_clk error\n", __func__);
-		return ret;
+		ret = clk_prepare_enable(dphy->psm_clk);
+		if (ret < 0) {
+			dev_err(dphy->dev, "%s, enable psm_clk error\n", __func__);
+			return ret;
+		}
+
+		ret = clk_prepare_enable(dphy->apb_clk);
+		if (ret < 0) {
+			dev_err(dphy->dev, "%s, enable apb_clk error\n", __func__);
+			return ret;
+		}
+
+		reset_control_deassert(dphy->rst_dphy);
+		reset_control_deassert(dphy->phy_cmnrst);
 	}
-
-	ret = clk_prepare_enable(dphy->apb_clk);
-	if (ret < 0) {
-		dev_err(dphy->dev, "%s, enable apb_clk error\n", __func__);
-		return ret;
-	}
-
-	reset_control_deassert(dphy->rst_dphy);
-	reset_control_deassert(dphy->phy_cmnrst);
 
 	return 0;
 }

@@ -2,9 +2,9 @@
 /*
  * Copyright 2024 Cix Technology Group Co., Ltd.
  */
-#include "csi_bridge_hw.h"
 #include "csi_dma_cap.h"
 #include "csi_rcsu_hw.h"
+#include <linux/property.h>
 #include <linux/soc/cix/cix_ddr_lp.h>
 
 #define CSIDMA_PLL_CLK 1200
@@ -709,6 +709,7 @@ err:
 static int csi_dma_capture_release(struct file *file)
 {
 	struct csi_dma_cap_dev *dma_cap = video_drvdata(file);
+	struct csi_dma_dev *csi_dma = dma_cap->csi_dma;
 	struct device *dev = &dma_cap->pdev->dev;
 	struct video_device *vdev = video_devdata(file);
 	struct vb2_queue *q = vdev->queue;
@@ -721,10 +722,12 @@ static int csi_dma_capture_release(struct file *file)
 
 	mutex_lock(&dma_cap->lock);
 
-	if (dma_cap->ddr_lp_mode == 0) {
-		cix_set_ddrlp(1);
-		dma_cap->ddr_lp_mode = 1;
-		usleep_range(1000, 1000 + 100);
+	if (csi_dma->platform_id == CIX_PLATFORM_SOC) {
+		if (dma_cap->ddr_lp_mode == 0) {
+			cix_set_ddrlp(1);
+			dma_cap->ddr_lp_mode = 1;
+			usleep_range(1000, 1000 + 100);
+		}
 	}
 
 	ret = _vb2_fop_release(file, NULL);
@@ -1147,18 +1150,14 @@ static int csi_dma_cap_s_fmt_mplane(struct file *file, void *priv,
 int csi_dma_config_rcsu(struct csi_dma_cap_dev *dma_cap)
 {
 	struct csi_dma_dev *csi_dma = dma_cap->csi_dma;
-	struct csi2rx_priv *mipi_csi2_dev =
-		v4l2_subdev_to_csi2rx(dma_cap->source_subdev);
 
-	/*here we select the mipi-csi2 dev id equal to the csi_dma id */
-	csi_dma->rcsu_dev->chan_mux_sel(csi_dma->rcsu_dev, csi_dma->id,
-					mipi_csi2_dev->id);
+	if (csi_dma->platform_id == CIX_PLATFORM_SOC) {
 
-	csi_dma->rcsu_dev->dphy_psm_config(csi_dma->rcsu_dev);
+		csi_dma->rcsu_dev->dphy_psm_config(csi_dma->rcsu_dev);
 
-	/*temp test force csidma2 use mipi-csi2 stream2*/
-	if (csi_dma->id == 2)
-		csi_dma->rcsu_dev->chan_mux_sel(csi_dma->rcsu_dev, csi_dma->id, 0);
+		csi_dma->rcsu_dev->chan_mux_sel(csi_dma->rcsu_dev, csi_dma->id, csi_dma->rcsu_channel_sel);
+		csi_dma->rcsu_dev->mode_config(csi_dma->rcsu_dev,csi_dma->rcsu_dphy_mode);
+	}
 
 	return 0;
 }
@@ -1213,6 +1212,7 @@ static int csi_dma_cap_streamon(struct file *file, void *priv,
 				enum v4l2_buf_type type)
 {
 	struct csi_dma_cap_dev *dma_cap = video_drvdata(file);
+	struct csi_dma_dev *csi_dma = dma_cap->csi_dma;
 	struct device *dev = &dma_cap->pdev->dev;
 	struct v4l2_subdev *src_sd;
 	int ret;
@@ -1249,10 +1249,12 @@ static int csi_dma_cap_streamon(struct file *file, void *priv,
 		goto power;
 	}
 
-	if (dma_cap->ddr_lp_mode == 1) {
-		cix_set_ddrlp(0);
-		dma_cap->ddr_lp_mode = 0;
-		usleep_range(1000, 1000 + 100);
+	if (csi_dma->platform_id == CIX_PLATFORM_SOC) {
+		if (dma_cap->ddr_lp_mode == 1) {
+			cix_set_ddrlp(0);
+			dma_cap->ddr_lp_mode = 0;
+			usleep_range(1000, 1000 + 100);
+		}
 	}
 
 	csi_dma_s_stream(dma_cap, 1);
@@ -1278,6 +1280,7 @@ static int csi_dma_cap_streamoff(struct file *file, void *priv,
 				 enum v4l2_buf_type type)
 {
 	struct csi_dma_cap_dev *dma_cap = video_drvdata(file);
+	struct csi_dma_dev *csi_dma = dma_cap->csi_dma;
 	struct device *dev = &dma_cap->pdev->dev;
 	struct v4l2_subdev *src_sd = dma_cap->source_subdev;
 	int ret;
@@ -1294,10 +1297,12 @@ static int csi_dma_cap_streamoff(struct file *file, void *priv,
 
 	csi_dma_s_stream(dma_cap, 0);
 
-	if (dma_cap->ddr_lp_mode == 0) {
-		cix_set_ddrlp(1);
-		dma_cap->ddr_lp_mode = 1;
-		usleep_range(1000, 1000 + 100);
+	if (csi_dma->platform_id == CIX_PLATFORM_SOC) {
+		if (dma_cap->ddr_lp_mode == 0) {
+			cix_set_ddrlp(1);
+			dma_cap->ddr_lp_mode = 1;
+			usleep_range(1000, 1000 + 100);
+		}
 	}
 
 	ret = csi_dma_pipeline_enable(dma_cap, 0);
@@ -1423,9 +1428,20 @@ static int csi_dma_cap_enum_framesizes(struct file *file, void *priv,
 	if (ret)
 		return -EINVAL;
 
-	parent = of_get_parent(dma_cap->pdev->dev.of_node);
-	if (of_device_is_compatible(parent, "cix,cix-bridge") &&
-	    (fse.max_width > CSI_DMA_4K)) {
+	/* 4K limit when fed by cix-bridge (DT parent or ACPI cix,hw) */
+	if (dma_cap->pdev->dev.of_node) {
+		parent = of_get_parent(dma_cap->pdev->dev.of_node);
+		if (parent) {
+			if (of_device_is_compatible(parent, "cix,cix-bridge") &&
+			    (fse.max_width > CSI_DMA_4K)) {
+				of_node_put(parent);
+				dev_err(dev, "format exceed 4K, CSI-DMA not support\n");
+				return -EINVAL;
+			}
+			of_node_put(parent);
+		}
+	} else if (device_property_present(&dma_cap->pdev->dev, "cix,hw") &&
+		   (fse.max_width > CSI_DMA_4K)) {
 		dev_err(dev, "format exceed 4K, CSI-DMA not support\n");
 		return -EINVAL;
 	}
@@ -1475,9 +1491,19 @@ static int csi_dma_cap_enum_frameintervals(struct file *file, void *fh,
 	if (ret)
 		return -EINVAL;
 
-	parent = of_get_parent(dma_cap->pdev->dev.of_node);
-	if (of_device_is_compatible(parent, "cix,cix-bridge") &&
-	    (fie.width > CSI_DMA_4K))
+	/* 4K limit when fed by cix-bridge (DT parent or ACPI cix,hw) */
+	if (dma_cap->pdev->dev.of_node) {
+		parent = of_get_parent(dma_cap->pdev->dev.of_node);
+		if (parent) {
+			if (of_device_is_compatible(parent, "cix,cix-bridge") &&
+			    (fie.width > CSI_DMA_4K)) {
+				of_node_put(parent);
+				return -EINVAL;
+			}
+			of_node_put(parent);
+		}
+	} else if (device_property_present(&dma_cap->pdev->dev, "cix,hw") &&
+		   (fie.width > CSI_DMA_4K))
 		return -EINVAL;
 
 	interval->type = V4L2_FRMIVAL_TYPE_DISCRETE;

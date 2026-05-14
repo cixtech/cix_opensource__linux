@@ -6,6 +6,10 @@ ifneq ($(KERNELRELEASE),)
 	obj-$(CONFIG_CSI_DMA) += csi_dma.o
 	csi_dma-objs = csi_dma_core.o csi_dma_cap.o
 	obj-$(CONFIG_CSI_DMA) += csi_bridge_hw.o
+	csi_bridge_hw-objs = csi_bridge.o
+ifneq ($(CONFIG_PLAT_DSM_SYSEVENT),)
+	csi_bridge_hw-objs += csi_dsm.o
+endif
 	obj-$(CONFIG_CSI_DMA) += csi_mipi_csi2.o
 	obj-$(CONFIG_CSI_DMA) += csi_mipi_csi2_hw.o
 	obj-$(CONFIG_CSI_DMA) += csi_mipi_dphy_rx.o

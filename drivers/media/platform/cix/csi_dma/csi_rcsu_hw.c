@@ -16,8 +16,11 @@
 #include <linux/platform_device.h>
 #include <linux/acpi.h>
 #include "csi_rcsu_hw.h"
+#include "csi_common.h"
 
 #define CIX_RCSU_HW_DRIVER_NAME "cix-csi-rcsu-hw"
+
+#define CSI_MUX_SEL (0x208)   /* for B2/START1 */
 #define CSI_RCSU_STRAP_PIN0 (0x300)
 
 static inline u32 csi_rcsu_read(struct csi_rcsu_dev *csi_rcsu_dev, u32 reg)
@@ -37,16 +40,32 @@ static void csi_mux_sel(struct csi_rcsu_dev *csi_rcsu_dev, u32 index,
 	u32 offset;
 	u32 value;
 
-	if (index == 0 || index == 2)
-		offset = 24;
-	else
-		offset = 28;
+	index = index %4;
 
 	mutex_lock(&csi_rcsu_dev->mutex);
-	value = csi_rcsu_read(csi_rcsu_dev, CSI_RCSU_STRAP_PIN0) &
-		(~(0x3 << offset));
-	csi_rcsu_write(csi_rcsu_dev, CSI_RCSU_STRAP_PIN0,
-		       value | (mipi_src & 0x03) << offset);
+
+	if (csi_rcsu_dev->platform_id & CIX_PLATFORM_ID_A0_MASK) {
+
+		if (index == 0 || index == 2)
+			offset = 24;
+		else
+			offset = 28;
+
+		value = csi_rcsu_read(csi_rcsu_dev, CSI_RCSU_STRAP_PIN0) &
+			(~(0x3 << offset));
+		csi_rcsu_write(csi_rcsu_dev, CSI_RCSU_STRAP_PIN0,
+				value | (mipi_src & 0x03) << offset);
+	} else if (csi_rcsu_dev->platform_id &
+			(CIX_PLATFORM_ID_B2_MASK | CIX_PLATFORM_ID_START1_MASK)) {
+
+		if (index == 3) {
+			value = csi_rcsu_read(csi_rcsu_dev, CSI_MUX_SEL);
+			value &= ~BIT(0);
+			value |= (mipi_src & 0x01);
+			csi_rcsu_write(csi_rcsu_dev, CSI_MUX_SEL, value);
+		}
+	}
+
 	mutex_unlock(&csi_rcsu_dev->mutex);
 }
 
@@ -71,6 +90,21 @@ static void dphy_psm_config(struct csi_rcsu_dev *csi_rcsu_dev)
 	mutex_unlock(&csi_rcsu_dev->mutex);
 }
 
+static void dphy_mode_config(struct csi_rcsu_dev *csi_rcsu_dev,int mode)
+{
+	u32 value;
+
+	mutex_lock(&csi_rcsu_dev->mutex);
+
+	value = csi_rcsu_read(csi_rcsu_dev, CSI_RCSU_STRAP_PIN0);
+	/*phy config bit[11:10]*/
+	value &= ~PHY_MODE_MASK;
+	value |= ((mode << PHY_MODE_OFFSET) & PHY_MODE_MASK);
+	csi_rcsu_write(csi_rcsu_dev, CSI_RCSU_STRAP_PIN0, value);
+
+	mutex_unlock(&csi_rcsu_dev->mutex);
+}
+
 static const struct of_device_id csi_rcsu_hw_of_match[] = {
 	{
 		.compatible = "cix,cix-csi-rcsu-hw",
@@ -85,10 +119,24 @@ static const struct acpi_device_id csi_rcsu_hw_acpi_match[] = {
 };
 MODULE_DEVICE_TABLE(acpi, csi_rcsu_hw_acpi_match);
 
+static int csi_rcsu_hw_parse_dt(struct csi_rcsu_dev *rcsu)
+{
+	struct device *dev = rcsu->dev;
+
+	if (of_property_read_u32(dev->of_node, "platform-id",
+				 &rcsu->platform_id)) {
+		dev_err(dev, "failed to get platform-id from device tree\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int csi_rcsu_hw_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct csi_rcsu_dev *rcsu;
+	int ret;
 
 	dev_info(dev, "rcsu hw probe enter\n");
 
@@ -102,10 +150,16 @@ static int csi_rcsu_hw_probe(struct platform_device *pdev)
 	if (IS_ERR(rcsu->base))
 		return PTR_ERR(rcsu->base);
 
+	ret = csi_rcsu_hw_parse_dt(rcsu);
+	if (ret < 0)
+		return ret;
+
 	mutex_init(&rcsu->mutex);
 
 	rcsu->chan_mux_sel = csi_mux_sel;
 	rcsu->dphy_psm_config = dphy_psm_config;
+	rcsu->mode_config = dphy_mode_config;
+
 	platform_set_drvdata(pdev, rcsu);
 
 	dev_info(dev, "csi rcsu hw probe exit\n");

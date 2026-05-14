@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "csi_dma_cap.h"
-#include "csi_bridge_hw.h"
 #include "csi_rcsu_hw.h"
 #include "csi_common.h"
+#include <linux/of_reserved_mem.h>
+#include <linux/iommu.h>
+#include <linux/err.h>
 
 enum cix_dphy_pads {
 	CIX_CSI_DMA_PAD_SINK,
 	CIX_CSI_DMA_PAD_MAX,
 };
+
+#define CIX_DMA_DEV_MAX_CHANNEL_ID	(0x04)
+#define CIX_DMA_DEV_MAX_WORK_MODE	(0x04)
 
 static int csi_dma_pipeline_set_stream(struct csi_dma_pipeline *p, bool on)
 {
@@ -49,12 +54,14 @@ static int csi_dma_pipeline_prepare(struct csi_dma_pipeline *p)
 				continue;
 
 			pad = media_pad_remote_pad_unique(s_pad);
+			if (IS_ERR(pad))
+				return PTR_ERR(pad);
 			if (pad)
 				break;
 		}
 
 		if (!pad)
-			return -1;
+			return -ENOLINK;
 		sd = media_entity_to_v4l2_subdev(pad->entity);
 		dev_info(dev, "get the subdev name %s entity\n", sd->name);
 		p->subdevs[p->num_subdevs++] = sd;
@@ -132,7 +139,8 @@ static int subdev_notifier_complete(struct v4l2_async_notifier *notifier)
 
 	dev_info(dev, "csi_dma complete enter\n");
 	ret = v4l2_device_register_subdev_nodes(&csi_dma->v4l2_dev);
-	csi_dma_pipeline_prepare(&csi_dma->pipe);
+	if (ret == 0)
+		ret = csi_dma_pipeline_prepare(&csi_dma->pipe);
 
 	return ret;
 }
@@ -236,7 +244,7 @@ static int csi_dma_parse(struct csi_dma_dev *csi_dma)
 	int ret = 0;
 
 	if (has_acpi_companion(dev)) {
-		ret = device_property_read_u32(dev, "csi-dma-id", &csi_dma->id);
+		ret = device_property_read_u32(dev, CIX_DMA_OF_NODE_NAME, &csi_dma->id);
 	} else {
 		ret = csi_dma->id =
 			of_alias_get_id(node, CIX_DMA_OF_NODE_NAME);
@@ -247,6 +255,28 @@ static int csi_dma_parse(struct csi_dma_dev *csi_dma)
 			csi_dma->id);
 		return -EINVAL;
 	}
+
+	ret = device_property_read_u32(dev, "channel_id", &csi_dma->rcsu_channel_sel);
+	if ((ret < 0) || (csi_dma->rcsu_channel_sel >= CIX_DMA_DEV_MAX_CHANNEL_ID)) {
+		dev_err(dev, "Invalid channel_id  (%d)\n",
+				csi_dma->rcsu_channel_sel);
+		return -EINVAL;
+	}
+
+	ret = device_property_read_u32(dev, "dphy_mode", &csi_dma->rcsu_dphy_mode);
+	if ((ret < 0) || (csi_dma->rcsu_dphy_mode >= CIX_DMA_DEV_MAX_WORK_MODE)) {
+		dev_err(dev, "Invalid dphy mode \n");
+		return -EINVAL;
+	}
+
+	if (iommu_get_domain_for_dev(dev) == NULL) {
+		if (dev->of_node && of_reserved_mem_device_init(dev)) {
+			dev_err(dev, "init reserve memory failed\n");
+			return -EINVAL;
+		}
+		dev_info(dev, "csidma %d smmu disable\n", csi_dma->id);
+	} else
+		dev_info(dev, "csidma %d smmu enable\n", csi_dma->id);
 
 	dev_info(dev, "csi dma id %d\n", csi_dma->id);
 
@@ -260,7 +290,7 @@ static const struct of_device_id csi_dma_of_match[] = {
 MODULE_DEVICE_TABLE(of, csi_dma_of_match);
 
 static const struct acpi_device_id csi_dma_acpi_match[] = {
-	{ .id = "CIXH3028"},
+	{ .id = "CIXH3030"},  /* Logical CSI DMA device (cix_dma_dev_0), bridge is CIXH3028 */
 	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(acpi, csi_dma_acpi_match);
@@ -278,6 +308,7 @@ static int csi_dma_probe(struct platform_device *pdev)
 
 	csi_dma->pdev = pdev;
 	csi_dma->dev = dev;
+	csi_dma->platform_id = CIX_PLATFORM_ID;
 
 	ret = csi_dma_parse(csi_dma);
 	if (ret < 0)

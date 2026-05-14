@@ -36,6 +36,7 @@
 #define CIX_MIPI_CSI2_SUBDEV_NAME	CIX_MIPI_CSI2_DRIVER_NAME
 #define CIX_MIPI_OF_NODE_NAME		"cix-csi2-virt"
 #define CIX_MIPI_MAX_DEVS			(32)
+#define CIX_MIPI_MAX_VIRTUAL_CHANNEL		(4)
 
 #define DATA_PATH_WIDTH (8 * 4)
 
@@ -231,16 +232,7 @@ static int mipi_csi2_s_stream(struct v4l2_subdev *sd, int enable)
 	csi2rx->hw_stream_id = stream_id;
 
 	if (enable) {
-		/*here fix,stream id equal vc id*/
-		if (stream_id == 2) {
-			/*force use virtual channel1*/
-			hw_drv->stream_start(csi2rx->mipi_csi2_hw,stream_id,1);
-			csi2rx->virtual_chan_id = 1;
-		} else {
-			hw_drv->stream_start(csi2rx->mipi_csi2_hw,stream_id,stream_id);
-			csi2rx->virtual_chan_id = stream_id;
-		}
-
+		hw_drv->stream_start(csi2rx->mipi_csi2_hw,stream_id,csi2rx->virtual_chan_id);
 		csi2rx->stream_on = 1;
 	} else {
 		hw_drv->stream_stop(csi2rx->mipi_csi2_hw,stream_id);
@@ -481,7 +473,7 @@ static int mipi_csi2_parse(struct csi2rx_priv *csi2rx)
 	int ret = -1;
 
 	if (has_acpi_companion(dev)) {
-		ret = device_property_read_u8(dev, CIX_MIPI_OF_NODE_NAME,
+		ret = device_property_read_u32(dev, CIX_MIPI_OF_NODE_NAME,
 				&csi2rx->id);
 	} else {
 		ret = csi2rx->id =
@@ -492,6 +484,14 @@ static int mipi_csi2_parse(struct csi2rx_priv *csi2rx)
 		dev_err(dev, "invalid mipi device id (%d)\n", csi2rx->id);
 		return -EINVAL;
 	}
+
+	ret = device_property_read_u32(dev, "vc", &csi2rx->virtual_chan_id);
+	if ((ret < 0) || (csi2rx->virtual_chan_id >= CIX_MIPI_MAX_VIRTUAL_CHANNEL)) {
+		dev_err(dev, "invalid mipi virtual channel id (%d)\n", csi2rx->virtual_chan_id);
+		return -EINVAL;
+	}
+
+	pr_info("virtual mipi-csi2 %d get virtual_chan_id %d",csi2rx->id,csi2rx->virtual_chan_id);
 
 	return 0;
 }
@@ -547,10 +547,11 @@ static int mipi_csi2_probe(struct platform_device *pdev)
 
 	csi2rx->dev = dev;
 	csi2rx->pdev = pdev;
-	csi2rx->mipi_csi2_hw = mipi_csi2_hw_attach(csi2rx);
 
 	/*parse the dts or ACPI table*/
 	mipi_csi2_parse(csi2rx);
+
+	csi2rx->mipi_csi2_hw = mipi_csi2_hw_attach(csi2rx);
 
 	mutex_init(&csi2rx->lock);
 
@@ -622,10 +623,17 @@ static const struct of_device_id mipi_csi2_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, mipi_csi2_of_match);
 
+static const struct acpi_device_id mipi_csi2_acpi_match[] = {
+	{ .id = "CIXH3029" },  /* MIPI CSI2 Virtual Device for ACPI */
+	{ /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(acpi, mipi_csi2_acpi_match);
+
 static struct platform_driver mipi_csi2_driver = {
 	.driver = {
 		.name = CIX_MIPI_CSI2_DRIVER_NAME,
 		.of_match_table = mipi_csi2_of_match,
+		.acpi_match_table = ACPI_PTR(mipi_csi2_acpi_match),
 		.pm = &mipi_csi2_dev_pm_ops,
 	},
 	.probe = mipi_csi2_probe,

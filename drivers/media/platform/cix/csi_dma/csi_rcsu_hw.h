@@ -4,14 +4,19 @@
 
 #define PHY_PSM_CLOCK_FREQ_OFFSET                   0
 #define PHY_PSM_CLOCK_FREQ_MASK                     0xFF
+#define PHY_MODE_OFFSET                   	(0x0A)
+#define PHY_MODE_MASK				(0xC00)
+
 struct csi_rcsu_dev {
 	struct device *dev;
 	struct platform_device *pdev;
 	void __iomem *base;
 	u8 id;
+	u32 platform_id;
 	struct mutex mutex;
 	void (*chan_mux_sel)(struct csi_rcsu_dev *csi_rcsu_dev, unsigned int index, unsigned int chan);
 	void (*dphy_psm_config)(struct csi_rcsu_dev *csi_rcsu_dev);
+	void (*mode_config)(struct csi_rcsu_dev *csi_rcsu_dev,int mode);
 };
 
 #endif

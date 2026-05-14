@@ -390,7 +390,7 @@ static int mipi_csi2_hw_parse(struct mipi_csi2_hw *mipi_hw)
 	int ret;
 
 	if (has_acpi_companion(dev)) {
-		ret = device_property_read_u8(dev, CIX_MIPI_CSI2_HW_OF_NODE_NAME,
+		ret = device_property_read_u32(dev, CIX_MIPI_CSI2_HW_OF_NODE_NAME,
 				&mipi_hw->id);
 	} else {
 		ret = mipi_hw->id =
@@ -440,46 +440,49 @@ static int mipi_csi2_hw_parse(struct mipi_csi2_hw *mipi_hw)
 
 	dev_info(dev, "mipi get the clk & rest resource\n");
 
-	mipi_hw->sclk = devm_clk_get_optional(&pdev->dev, "csi_sclk");
-	if (IS_ERR(mipi_hw->sclk)) {
-		dev_err(&pdev->dev, "Couldn't get sys clock\n");
-		return PTR_ERR(mipi_hw->sclk);
-	}
+	if (mipi_hw->platform_id == CIX_PLATFORM_SOC) {
 
-	mipi_hw->pclk = devm_clk_get_optional(&pdev->dev, "csi_pclk");
-	if (IS_ERR(mipi_hw->pclk)) {
-		dev_err(&pdev->dev, "Couldn't get csi_pclk clock\n");
-		return PTR_ERR(mipi_hw->pclk);
-	}
+		mipi_hw->sclk = devm_clk_get_optional(&pdev->dev, "csi_sclk");
+		if (IS_ERR(mipi_hw->sclk)) {
+			dev_err(&pdev->dev, "Couldn't get sys clock\n");
+			return PTR_ERR(mipi_hw->sclk);
+		}
 
-	if ((mipi_hw->id == 0) || (mipi_hw->id == 2)) {
-		for (i = 0; i < 4; i++) {
-			mipi_hw->pixel_clk[i] = devm_clk_get_optional(
-				&pdev->dev, mipi_csi2_clk_names[i]);
-			if (IS_ERR(mipi_hw->pixel_clk[i])) {
+		mipi_hw->pclk = devm_clk_get_optional(&pdev->dev, "csi_pclk");
+		if (IS_ERR(mipi_hw->pclk)) {
+			dev_err(&pdev->dev, "Couldn't get csi_pclk clock\n");
+			return PTR_ERR(mipi_hw->pclk);
+		}
+
+		if ((mipi_hw->id == 0) || (mipi_hw->id == 2)) {
+			for (i = 0; i < 4; i++) {
+				mipi_hw->pixel_clk[i] = devm_clk_get_optional(
+						&pdev->dev, mipi_csi2_clk_names[i]);
+				if (IS_ERR(mipi_hw->pixel_clk[i])) {
+					dev_err(&pdev->dev, "Couldn't get %s clock\n",
+							mipi_csi2_clk_names[i]);
+					return PTR_ERR(mipi_hw->pixel_clk[i]);
+				}
+			}
+		} else {
+			mipi_hw->pixel_clk[0] = devm_clk_get_optional(
+					&pdev->dev, mipi_csi2_clk_names[0]);
+			if (IS_ERR(mipi_hw->pixel_clk[0])) {
 				dev_err(&pdev->dev, "Couldn't get %s clock\n",
-					mipi_csi2_clk_names[i]);
-				return PTR_ERR(mipi_hw->pixel_clk[i]);
+						mipi_csi2_clk_names[0]);
+				return PTR_ERR(mipi_hw->pixel_clk[0]);
 			}
 		}
-	} else {
-		mipi_hw->pixel_clk[0] = devm_clk_get_optional(
-			&pdev->dev, mipi_csi2_clk_names[0]);
-		if (IS_ERR(mipi_hw->pixel_clk[0])) {
-			dev_err(&pdev->dev, "Couldn't get %s clock\n",
-				mipi_csi2_clk_names[0]);
-			return PTR_ERR(mipi_hw->pixel_clk[0]);
+
+		mipi_hw->reset =
+			devm_reset_control_get_optional_shared(&pdev->dev, "csi_reset");
+
+		if (IS_ERR(mipi_hw->reset)) {
+			if (PTR_ERR(mipi_hw->reset) != -EPROBE_DEFER)
+				dev_err(&pdev->dev,
+						"Failed to get csi  reset control\n");
+			return PTR_ERR(mipi_hw->reset);
 		}
-	}
-
-	mipi_hw->reset =
-		devm_reset_control_get_optional_shared(&pdev->dev, "csi_reset");
-
-	if (IS_ERR(mipi_hw->reset)) {
-		if (PTR_ERR(mipi_hw->reset) != -EPROBE_DEFER)
-			dev_err(&pdev->dev,
-				"Failed to get csi  reset control\n");
-		return PTR_ERR(mipi_hw->reset);
 	}
 
 	return 0;
@@ -498,7 +501,7 @@ static int mipi_csi2_hw_probe(struct platform_device *pdev)
 
 	mipi_hw->dev = dev;
 	mipi_hw->pdev = pdev;
-	mipi_hw->drv_data = device_get_match_data(dev);
+	mipi_hw->platform_id = CIX_PLATFORM_ID;
 
 	mutex_init(&mipi_hw->lock);
 	spin_lock_init(&mipi_hw->slock);
@@ -506,7 +509,7 @@ static int mipi_csi2_hw_probe(struct platform_device *pdev)
 	/*parse the dts or ACPI table*/
 	mipi_csi2_hw_parse(mipi_hw);
 
-	mipi_hw->platform_id = CIX_PLATFORM_SOC;
+	mipi_hw->drv_data = device_get_match_data(dev);
 
 	platform_set_drvdata(pdev, mipi_hw);
 
@@ -534,10 +537,17 @@ static const struct of_device_id mipi_csi2_hw_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, mipi_csi2_hw_of_match);
 
+static const struct acpi_device_id mipi_csi2_hw_acpi_match[] = {
+	{ .id = "CIXH302D", .driver_data = (kernel_ulong_t)&cix_mipi_hw_drv_data },
+	{ /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(acpi, mipi_csi2_hw_acpi_match);
+
 static struct platform_driver mipi_csi2_hw_driver = {
 	.driver = {
 		.name = CIX_MIPI_CSI2_HW_DRIVER_NAME,
 		.of_match_table = mipi_csi2_hw_of_match,
+		.acpi_match_table = ACPI_PTR(mipi_csi2_hw_acpi_match),
 	},
 	.probe = mipi_csi2_hw_probe,
 	.remove = mipi_csi2_hw_remove,
