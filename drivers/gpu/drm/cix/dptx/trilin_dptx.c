@@ -2802,10 +2802,12 @@ static void trilin_dp_hpd_event_work_func(struct work_struct *work)
 	old_status = dp->status;
 	drm_helper_probe_detect(&dp->connector.base, NULL, false);
 
-	if(old_status == dp->status) {
-		DP_INFO("dp status is same : %d", dp->status);
+	if (old_status == dp->status) {
+		DP_INFO("dp status is same : %d\n", dp->status);
 		return;
 	}
+
+	/* dp->status reflects physical sink presence (MST and SST). */
 	connected = (dp->status == connector_status_connected);
 
 	if (connected)

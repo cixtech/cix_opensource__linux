@@ -82,7 +82,7 @@ trilin_dp_connector_detect(struct drm_connector *connector, bool force)
 {
 	struct trilin_dp *dp = connector_to_dp(connector);
 	int rc;
-	enum drm_connector_status real_status;
+	enum drm_connector_status status = connector_status_disconnected;
 	bool vrr_capable = false;
 
 	DP_DEBUG("enter\n");
@@ -101,29 +101,29 @@ trilin_dp_connector_detect(struct drm_connector *connector, bool force)
 
 	if (!trilin_dp_get_hpd_state(dp)) {
 		trilin_dp_handle_disconnect(dp, false);
-		real_status = dp->status = connector_status_disconnected;
+		dp->status = connector_status_disconnected;
 	} else {
 		trilin_dp_handle_connect(dp, false);
-		real_status = connector_status_connected;
+		dp->status = connector_status_connected;
 		if (dp->mst.mst_active) {
 			DP_DEBUG(
 				"mst device that base connector cannot be used.\n");
-			dp->status = connector_status_disconnected;
+			status = connector_status_disconnected;
 		} else {
-			dp->status = connector_status_connected;
+			status = connector_status_connected;
 		}
 		vrr_capable = trilin_dp_vrr_is_capable(dp, connector);
 		DP_DEBUG("[CONNECTOR:%d:%s] VRR capable: %d\n",
 			connector->base.id, connector->name, vrr_capable);
 		drm_connector_set_vrr_capable_property(connector, vrr_capable);
 	}
-	drm_dp_set_subconnector_property(connector, real_status, dp->dpcd,
+	drm_dp_set_subconnector_property(connector, dp->status, dp->dpcd,
 					 dp->downstream_ports);
-	return dp->status;
+	return status;
 end:
 	mutex_unlock(&dp->session_lock);
 	dp->status = connector_status_disconnected;
-	return dp->status;
+	return status;
 }
 
 bool trilin_dp_plugged_status(struct trilin_dp *dp)
