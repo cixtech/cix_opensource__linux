@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 ifneq ($(KERNELRELEASE),)
 	ccflags-y += -I$(srctree)/drivers/media/i2c/cix/lt7911uxc
+	ccflags-y += -I$(srctree)/drivers/media/platform/cix/csi_dma
 	ccflags-y += -DLT7911UXC_DEBUG
 	obj-m += lt7911uxc.o
 else

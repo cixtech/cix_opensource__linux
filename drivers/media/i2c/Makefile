@@ -149,3 +149,4 @@ obj-$(CONFIG_VIDEO_WM8775) += wm8775.o
 obj-$(CONFIG_SDR_MAX2175) += max2175.o
 obj-$(CONFIG_VIDEO_LT7911UXC)	+= cix/lt7911uxc/
 obj-$(CONFIG_VIDEO_LT7911UXC)	+= cix/serdes_sensor/
+obj-$(CONFIG_VIDEO_LT7911UXC)	+= cix/ov5645/

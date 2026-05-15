@@ -16,7 +16,7 @@
 #define max96724_TX45_PIPE_X_DST_CTRL_ADDR 0x92D
 #define max96724_PIPE_X_SRC_0_MAP_ADDR 0x90D
 
-#define max96724_PHY_CLK (22)
+#define max96724_PHY_CLK (25)
 
 struct max96724 {
 	struct i2c_client *i2c_client;
@@ -354,6 +354,31 @@ static int max96724_setup_pipeline(struct device *dev, struct gmsl_link_ctx *g_c
 	return 0;
 }
 
+int z_max96724_reset_mipi_dphy(struct device *dev, int id)
+{
+	max96724_write_reg(dev,0x8a2, 0x30);
+	max96724_write_reg(dev,0x8a2, 0xf0);
+
+	return 0;
+}
+
+int z_max96724_reset_mipi_controller(struct device *dev, int id)
+{
+	u32 value;
+
+	value = max96724_read_reg(dev,0x8c9, &value);
+
+	value |= (1 << id);
+	max96724_write_reg(dev, 0x8c9, value);
+	mdelay(150);
+
+	value &= ~(1 << id);
+	max96724_write_reg(dev, 0x8c9,value);
+	mdelay(150);
+
+	return 0;
+}
+
 int z_max96724_start_streaming(struct device *dev, struct gmsl_link_ctx *g_ctx)
 {
 	struct max96724 *priv = NULL;
@@ -375,20 +400,12 @@ int z_max96724_start_streaming(struct device *dev, struct gmsl_link_ctx *g_ctx)
 	max96724_read_reg(dev, 0xf4, &val);
 	max96724_write_reg(dev, 0xf4, (val | (1<<g_ctx->des_link)) & 0xff);
 
-	/* //reset mipi phy*/
-	 /*if(s_priv->des_link==2 || s_priv->des_link==3){*/
-		 /*max96724_write_reg(dev,0x8a2, 0x30);*/
-	 /*}else{*/
-		 /*max96724_write_reg(dev,0x8a2, 0xc0);*/
-	 /*}*/
-	 /*max96724_write_reg(dev,0x8a2, 0xf0);*/
+	/*reset mipi phy*/
+	//z_max96724_reset_mipi_dphy(dev, g_ctx->des_link);
 
-	max96724_write_reg(dev, 0x8c9, 0xF);
+	pr_info("reset mipi-csi2 controller %d",g_ctx->des_link);
 
-	mdelay(150);
-	max96724_write_reg(dev, 0x8c9, 0x0);
-
-	mdelay(150);
+	z_max96724_reset_mipi_controller(dev,g_ctx->des_link);
 
 	// reset link
 	max96724_write_reg(dev, 0x018, (1<<g_ctx->des_link));
@@ -530,11 +547,11 @@ static int max96724_probe(struct i2c_client *client)
 	max96724_write_reg(&client->dev, 0x8a0, 0x24); // 2x4 mode
 
 	mipifreq = get_mipifreq();
+
 	max96724_write_reg(&client->dev, 0x415, 0x20 | mipifreq);
 	max96724_write_reg(&client->dev, 0x418, 0x20 | mipifreq);
 	max96724_write_reg(&client->dev, 0x41b, 0x20 | mipifreq);
 	max96724_write_reg(&client->dev, 0x41e, 0x20 | mipifreq);
-
 
 	max96724_write_reg(&client->dev, 0xf0, 0x62); //pipe1 GMSLB, Z-pipe; pipe0 GMSLA, Z-pipe
 	max96724_write_reg(&client->dev, 0xf1, 0xea); //pipe3 GMSLD, Z-pipe; pipe2 GMSLC, Z-pipe

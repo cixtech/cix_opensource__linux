@@ -183,6 +183,7 @@ struct lt7911uxc {
 	struct v4l2_subdev sd;
 	struct i2c_client *i2c_client;
 
+	u8 platform_id;
 	struct lt7911uxc_state *priv;
 	struct lt7911uxc_platform_data *pdata;
 };

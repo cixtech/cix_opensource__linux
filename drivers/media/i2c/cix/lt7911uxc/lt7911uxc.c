@@ -29,10 +29,22 @@
 
 #include <sound/jack.h>
 #include <sound/hdmi-codec.h>
+#include <csi_common.h>
 
 static int debug = 3;
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "debug level (0-3)");
+
+/* Platform ID */
+#define CIX_PLATFORM_SOC	(0)
+#define CIX_PLATFORM_EMU	(1)
+#define CIX_PLATFORM_FPGA	(2)
+
+#ifdef CONFIG_ARCH_CIX_EMU
+#define CIX_PLATFORM_ID CIX_PLATFORM_EMU
+#else
+#define CIX_PLATFORM_ID CIX_PLATFORM_SOC
+#endif
 
 #define TRANNING_TIME_OUT (150)
 #define I2C_MAX_XFER_SIZE (128)
@@ -102,6 +114,8 @@ MODULE_PARM_DESC(debug, "debug level (0-3)");
 
 #define V4L2_MBUS_CSI2_CONTINUOUS_CLOCK BIT(8)
 #define CIX_LT7911UXC_SUBDEV_NAME "lt7911uxc"
+
+#define LT7911UXC_PLATFORM_DEVID_OFFSET		(20)
 
 struct lt7911uxc_audio {
 	struct platform_device *pdev;
@@ -173,7 +187,7 @@ struct lt7911uxc {
 	u32 mbus_fmt_code;
 	u32 module_index;
 	u32 audio_sampling_rate;
-
+	u8 platform_id;
 	struct device *dev;
 	struct lt7911uxc_audio lt_audio;
 };
@@ -327,21 +341,24 @@ int lt7911_check_tranning_ready(struct lt7911uxc *lt7911uxc)
 	unsigned int loop = 0;
 	int ret = 0;
 
-	lt7911uxc->tranning_enable = 1;
+	if (lt7911uxc->platform_id == CIX_PLATFORM_SOC) {
+		lt7911uxc->tranning_enable = 1;
 
-	for (loop = 0; loop < TRANNING_TIME_OUT; loop++) {
-		if (lt7911uxc->tranning_ready)
-			break;
+		for (loop = 0; loop < TRANNING_TIME_OUT; loop++) {
+			if (lt7911uxc->tranning_ready)
+				break;
 
-		msleep(20);
-	}
+			msleep(20);
+		}
 
-	lt7911uxc->tranning_enable = 0;
+		lt7911uxc->tranning_enable = 0;
 
-	dev_info(&lt7911uxc->i2c_client->dev, "wait tranning time %d ms\n",
-		 loop * 10);
+		dev_info(&lt7911uxc->i2c_client->dev, "wait tranning time %d ms\n",
+				loop * 10);
 
-	if (loop != TRANNING_TIME_OUT)
+		if (loop != TRANNING_TIME_OUT)
+			ret = 1;
+	} else
 		ret = 1;
 
 	return ret;
@@ -686,7 +703,9 @@ static int lt7911uxc_s_stream(struct v4l2_subdev *sd, int on)
 
 	dev_info(dev, "lt7911 stream %s\n", on ? "on" : "off");
 
-	enable_stream(sd, on);
+	if (lt7911uxc->platform_id == CIX_PLATFORM_SOC)
+		enable_stream(sd, on);
+
 	if (on) {
 		lt7911uxc->tranning_ready = 0;
 		lt7911uxc->stream_on = 1;
@@ -728,6 +747,12 @@ static int lt7911uxc_enum_frame_sizes(struct v4l2_subdev *sd,
 	if (lt7911_check_tranning_ready(lt7911uxc)) {
 		lt7911uxc->cur_mode =
 			&lt7911uxc->support_modes[lt7911uxc->mode];
+
+		if (lt7911uxc->platform_id == CIX_PLATFORM_EMU)
+			/*here force frame size to 1920*1080*/
+			lt7911uxc->cur_mode =
+				&lt7911uxc->support_modes[1];
+
 		fse->min_width = lt7911uxc->cur_mode->width;
 		fse->max_width = lt7911uxc->cur_mode->width;
 		fse->min_height = lt7911uxc->cur_mode->height;
@@ -930,61 +955,63 @@ static int lt7911uxc_parse(struct lt7911uxc *lt7911uxc)
 		return ret;
 	}
 
-	lt7911uxc->power_gpio =
-		devm_gpiod_get_optional(dev, "power", GPIOD_OUT_HIGH);
-	if (IS_ERR(lt7911uxc->power_gpio)) {
-		dev_err(dev, "failed to get power gpio\n");
-		ret = PTR_ERR(lt7911uxc->power_gpio);
-		return ret;
+	if (lt7911uxc->platform_id == CIX_PLATFORM_SOC) {
+		lt7911uxc->power_gpio =
+			devm_gpiod_get_optional(dev, "power", GPIOD_OUT_HIGH);
+		if (IS_ERR(lt7911uxc->power_gpio)) {
+			dev_err(dev, "failed to get power gpio\n");
+			ret = PTR_ERR(lt7911uxc->power_gpio);
+			return ret;
+		}
+
+		lt7911uxc->power1_gpio =
+			devm_gpiod_get_optional(dev, "power1", GPIOD_OUT_HIGH);
+		if (IS_ERR(lt7911uxc->power1_gpio)) {
+			dev_err(dev, "failed to get power1 gpio\n");
+			ret = PTR_ERR(lt7911uxc->power1_gpio);
+			return ret;
+		}
+
+		lt7911uxc->reset_gpio =
+			devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+		if (IS_ERR(lt7911uxc->reset_gpio)) {
+			dev_err(dev, "failed to get reset gpio\n");
+			ret = PTR_ERR(lt7911uxc->reset_gpio);
+			return ret;
+		}
+
+		lt7911uxc->pwdn_gpio =
+			devm_gpiod_get_optional(dev, "pwdn", GPIOD_OUT_HIGH);
+		if (IS_ERR(lt7911uxc->pwdn_gpio)) {
+			dev_err(dev, "failed to get pwdn gpio\n");
+			ret = PTR_ERR(lt7911uxc->pwdn_gpio);
+			return ret;
+		}
+
+		pinctrl = devm_pinctrl_get(dev);
+		if (IS_ERR(pinctrl)) {
+			dev_err(dev, "failed to get pinctrl\n");
+			return -1;
+		}
+
+		pins_default = pinctrl_lookup_state(pinctrl, PINCTRL_STATE_DEFAULT);
+		if (IS_ERR(pins_default)) {
+			dev_err(dev, "failed to get default state\n");
+			return -1;
+		}
+
+		pins_gpio = pinctrl_lookup_state(pinctrl, "gpio");
+		if (IS_ERR(pins_gpio)) {
+			dev_err(dev, "failed to get gpio state\n");
+			return -1;
+		}
+
+		pinctrl_select_state(pinctrl, pins_gpio);
+
+		lt7911uxc->pinctrl = pinctrl;
+		lt7911uxc->pins_gpio = pins_gpio;
+		lt7911uxc->pins_default = pins_default;
 	}
-
-	lt7911uxc->power1_gpio =
-		devm_gpiod_get_optional(dev, "power1", GPIOD_OUT_HIGH);
-	if (IS_ERR(lt7911uxc->power1_gpio)) {
-		dev_err(dev, "failed to get power1 gpio\n");
-		ret = PTR_ERR(lt7911uxc->power_gpio);
-		return ret;
-	}
-
-	lt7911uxc->reset_gpio =
-		devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
-	if (IS_ERR(lt7911uxc->reset_gpio)) {
-		dev_err(dev, "failed to get reset gpio\n");
-		ret = PTR_ERR(lt7911uxc->reset_gpio);
-		return ret;
-	}
-
-	lt7911uxc->pwdn_gpio =
-		devm_gpiod_get_optional(dev, "pwdn", GPIOD_OUT_HIGH);
-	if (IS_ERR(lt7911uxc->pwdn_gpio)) {
-		dev_err(dev, "failed to get pwdn gpio\n");
-		ret = PTR_ERR(lt7911uxc->pwdn_gpio);
-		return ret;
-	}
-
-	pinctrl = devm_pinctrl_get(dev);
-	if (IS_ERR(pinctrl)) {
-		dev_err(dev, "failed to get pinctrl\n");
-		return -1;
-	}
-
-	pins_default = pinctrl_lookup_state(pinctrl, PINCTRL_STATE_DEFAULT);
-	if (IS_ERR(pins_default)) {
-		dev_err(dev, "failed to get default state\n");
-		return -1;
-	}
-
-	pins_gpio = pinctrl_lookup_state(pinctrl, "gpio");
-	if (IS_ERR(pins_gpio)) {
-		dev_err(dev, "failed to get gpio state\n");
-		return -1;
-	}
-
-	pinctrl_select_state(pinctrl, pins_gpio);
-
-	lt7911uxc->pinctrl = pinctrl;
-	lt7911uxc->pins_gpio = pins_gpio;
-	lt7911uxc->pins_default = pins_default;
 
 	lt7911uxc->support_modes = supported_modes_dphy;
 	lt7911uxc->cfg_num = ARRAY_SIZE(supported_modes_dphy);
@@ -1036,9 +1063,12 @@ static int lt7911uxc_resume(struct device *dev)
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct lt7911uxc *lt7911uxc = to_lt7911uxc(sd);
 
-	pinctrl_select_state(lt7911uxc->pinctrl, lt7911uxc->pins_gpio);
+	if (lt7911uxc->platform_id == CIX_PLATFORM_SOC) {
+		pinctrl_select_state(lt7911uxc->pinctrl, lt7911uxc->pins_gpio);
+		lt7911uxc_power_on(lt7911uxc);
+	}
 
-	return lt7911uxc_power_on(lt7911uxc);
+	return 0;
 }
 
 static int lt7911uxc_suspend(struct device *dev)
@@ -1047,8 +1077,10 @@ static int lt7911uxc_suspend(struct device *dev)
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct lt7911uxc *lt7911uxc = to_lt7911uxc(sd);
 
-	lt7911uxc_power_off(lt7911uxc);
-	pinctrl_select_state(lt7911uxc->pinctrl, lt7911uxc->pins_default);
+	if (lt7911uxc->platform_id == CIX_PLATFORM_SOC) {
+		lt7911uxc_power_off(lt7911uxc);
+		pinctrl_select_state(lt7911uxc->pinctrl, lt7911uxc->pins_default);
+	}
 
 	return 0;
 }
@@ -1199,7 +1231,7 @@ int lt7911uxc_register_audio_device(struct lt7911uxc *lt7911uxc)
 	};
 
 	lt7911uxc_aud->pdev = platform_device_register_data(
-		lt7911uxc->dev, HDMI_CODEC_DRV_NAME, PLATFORM_DEVID_AUTO,
+		lt7911uxc->dev, HDMI_CODEC_DRV_NAME, LT7911UXC_PLATFORM_DEVID_OFFSET,
 		&codec_data, sizeof(codec_data));
 
 	return PTR_ERR_OR_ZERO(lt7911uxc_aud->pdev);
@@ -1230,6 +1262,8 @@ static int lt7911uxc_probe(struct i2c_client *client)
 
 	lt7911uxc->i2c_client = client;
 	lt7911uxc->dev = dev;
+	lt7911uxc->platform_id = CIX_PLATFORM_ID;
+
 	lt7911uxc->tranning_ready = 0;
 	lt7911uxc->tranning_enable = 0;
 	lt7911uxc->active_num = 1;
@@ -1243,12 +1277,14 @@ static int lt7911uxc_probe(struct i2c_client *client)
 	lt7911uxc->timings = default_timing;
 	lt7911uxc->cur_mode = &lt7911uxc->support_modes[0];
 
-	/* FPGA: power will be controlled in download.tcl */
-	lt7911uxc_power_on(lt7911uxc);
+	if (lt7911uxc->platform_id == CIX_PLATFORM_SOC) {
+		/* FPGA: power will be controlled in download.tcl */
+		lt7911uxc_power_on(lt7911uxc);
 
-	ret = lt7911uxc_check_chip_id(lt7911uxc);
-	if (ret < 0)
-		return ret;
+		ret = lt7911uxc_check_chip_id(lt7911uxc);
+		if (ret < 0)
+			return ret;
+	}
 
 	INIT_WORK(&lt7911uxc->work_i2c_poll, lt7911uxc_work_i2c_poll);
 	timer_setup(&lt7911uxc->timer, lt7911uxc_irq_poll_timer, 0);
@@ -1285,9 +1321,12 @@ static int lt7911uxc_probe(struct i2c_client *client)
 		goto error;
 	}
 
-	ret = lt7911uxc_register_audio_device(lt7911uxc);
-	dev_info(dev, "%s:%d, register audio device, ret:%d\n", __func__,
-		 __LINE__, ret);
+	if (lt7911uxc->platform_id == CIX_PLATFORM_SOC) {
+		ret = lt7911uxc_register_audio_device(lt7911uxc);
+		dev_info(dev, "%s:%d, register audio device, ret:%d\n", __func__,
+				__LINE__, ret);
+	}
+
 	dev_info(dev, "lt7911 probe exit %s\n",
 		 ret == 0 ? "success" : "failed");
 
@@ -1303,7 +1342,9 @@ static void lt7911uxc_remove(struct i2c_client *client)
 
 	dev_info(sd->dev, "lt7911 remove enter\n");
 
-	lt7911uxc_unregister_audio_device(lt7911uxc);
+	if (lt7911uxc->platform_id == CIX_PLATFORM_SOC)
+		lt7911uxc_unregister_audio_device(lt7911uxc);
+
 	v4l2_ctrl_handler_free(&lt7911uxc->hdl);
 
 	del_timer_sync(&lt7911uxc->timer);
