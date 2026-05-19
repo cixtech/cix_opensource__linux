@@ -15,8 +15,7 @@
 
 #define REBOOT_REASON_SHIFT 0
 #define SUB_REBOOT_REASON_SHIFT 8
-#define REBOOT_REASON_MASK 0xFFFFFF00
-#define SUB_REBOOT_REASON_MASK 0xFFFF00FF
+#define REBOOT_REASON_MASK 0xFFFF0000
 
 #define SKY1_CSU_SE_WDT_2ND_TIMEOUT (0x8)
 
@@ -37,7 +36,7 @@ static void set_reboot_reason_sky1(unsigned int reboot_reason)
 void set_reboot_reason(unsigned int reboot_reason, unsigned int sub_reason)
 {
 	unsigned int value;
-	static u32 prev_set;
+	static unsigned int prev_set;
 
 	if (prev_set != 0 && prev_set != COLDBOOT) {
 		DST_ERR("reboot reason is already set\n");
@@ -48,15 +47,18 @@ void set_reboot_reason(unsigned int reboot_reason, unsigned int sub_reason)
 		value = readl((void *)(uintptr_t)g_reboot_reason_addr);
 		value &= REBOOT_REASON_MASK;
 		value |= reboot_reason;
-		value |= ((sub_reason << SUB_REBOOT_REASON_SHIFT) &
-			  ~SUB_REBOOT_REASON_MASK);
+		value |= sub_reason << SUB_REBOOT_REASON_SHIFT;
+		DST_PN("set reboot reason 0x%x\n", value);
 #ifdef CONFIG_SKY1_REBOOT_REASON
-		DST_ERR("set reboot reason 0x%x\n", value);
 		set_reboot_reason_sky1(value);
 #else
-		DST_PN("set reboot reason 0x%x\n", value);
 		writel(value, (void *)(uintptr_t)g_reboot_reason_addr);
 #endif
+
+		if ((reboot_reason == SE_REBOOT) && (sub_reason == SE_REBOOT_SE_SECOND_WDT)) {
+			return;
+		}
+
 		prev_set = reboot_reason;
 	} else {
 		DST_ERR("set failed 0x%x\n", reboot_reason);
