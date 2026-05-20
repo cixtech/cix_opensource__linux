@@ -62,6 +62,8 @@
 /* OFFSET between odd timer and even timer*/
 #define TIMER_OFFSET  0x1000
 
+#define MIN_DELTA_US  10
+
 struct sky1_timer {
 	void __iomem *base;
 	int irq;
@@ -282,6 +284,7 @@ static irqreturn_t sky1_timer_interrupt(int irq, void *dev_id)
 static int __init sky1_clockevent_init(struct sky1_timer *sky1tm)
 {
 	struct clock_event_device *ced = &sky1tm->ced;
+	unsigned int rate = clk_get_rate(sky1tm->tclk);
 
 	ced->name = TIMER_NAME;
 	ced->features = CLOCK_EVT_FEAT_ONESHOT | CLOCK_EVT_FEAT_DYNIRQ;
@@ -293,7 +296,8 @@ static int __init sky1_clockevent_init(struct sky1_timer *sky1tm)
 	ced->rating = 200;
 	ced->cpumask = cpu_possible_mask;
 	ced->irq = sky1tm->irq;
-	clockevents_config_and_register(ced, clk_get_rate(sky1tm->tclk), 1, UINT_MAX);
+	clockevents_config_and_register(ced, rate,
+		DIV_ROUND_UP_ULL((u64)rate * MIN_DELTA_US, 1000000), UINT_MAX);
 
 	return request_irq(sky1tm->irq, sky1_timer_interrupt,
 			   IRQF_TIMER, TIMER_NAME, ced);
