@@ -480,7 +480,6 @@ struct trilin_dp {
 	struct dptx_audio dp_audio;
 	struct cix_hdcp hdcp;
 	u8 pixel_per_cycle, force_pixel_per_cycle;
-	bool plugin;
 	bool hpd_multi_func;
 
 	u32 active_stream_cnt;

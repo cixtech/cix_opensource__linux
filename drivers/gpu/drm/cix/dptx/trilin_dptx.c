@@ -2496,8 +2496,10 @@ static int trilin_dp_host_init_from_bootloader(struct trilin_dp *dp)
 
 	/* add force to detect to sync call detect. */
 	drm_helper_probe_detect(&dp->connector.base, NULL, false);
-	/* then call the hpd envent */
-	schedule_delayed_work(&dp->hpd_event_work, 0);
+	/* probe_detect updates dp->status; reset so hpd_event_work sees a change */
+	dp->status = connector_status_unknown;
+	schedule_delayed_work(&dp->hpd_event_work, msecs_to_jiffies(10));
+	schedule_delayed_work(&dp->hpd_irq_work, msecs_to_jiffies(10));
 	return rc;
 }
 
