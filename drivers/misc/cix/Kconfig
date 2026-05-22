@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+source "drivers/misc/cix/sensor/core/Kconfig"
+source "drivers/misc/cix/sensor/cix_sensorhub/Kconfig"
+source "drivers/misc/cix/sensor/test/Kconfig"
+source "drivers/misc/cix/sensor/scp/Kconfig"
+
+config CIX_GPIO_READER
+	tristate "CIX GPIO reader support"
+	depends on GPIOLIB && SYSFS
+	help
+	  This driver provides a sysfs interface to read GPIO pin status
+	  for CIX platform ID detection or similar purposes.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called cix-gpio-reader.

@@ -71,3 +71,4 @@ obj-$(CONFIG_CIX_SENSORHUB)		+= cix/sensor/core/
 obj-$(CONFIG_CIX_KERNEL_SENSORHUB)	+= cix/sensor/cix_sensorhub/
 obj-$(CONFIG_CIX_HF_TEST_CASE) += cix/sensor/test/
 obj-$(CONFIG_CIX_SF_SCP_SUPPORT) += cix/sensor/scp/
+obj-$(CONFIG_CIX_GPIO_READER) += cix/cix-gpio-reader.o
