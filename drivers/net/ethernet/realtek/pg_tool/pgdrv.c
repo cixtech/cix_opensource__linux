@@ -532,7 +532,7 @@ static struct pci_device_id pgdrv_id_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x8162), },
 	{ PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x8167), },
 	{ PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x8168), },
-	{ PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x8169), },
+	/* { PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x8169), }, */
 	{ 0, },
 };
 
