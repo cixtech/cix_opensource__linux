@@ -8,6 +8,7 @@
 #define _LINLONDP_KMS_H_
 
 #include <linux/list.h>
+#include <linux/mutex.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_blend.h>
@@ -277,6 +278,9 @@ struct linlondp_kms_dev {
 	int n_crtcs;
 	/** @crtcs: crtcs list */
 	struct linlondp_crtc crtcs[LINLONDP_MAX_KMS_CRTCS];
+	/* Snapshot taken at atomic_check when CRTC goes active->inactive (user blank). */
+	struct drm_atomic_state *pre_blank_state;
+	struct mutex pre_blank_lock;
 };
 
 #define to_kplane(p) container_of(p, struct linlondp_plane, base)
@@ -356,5 +360,8 @@ struct linlondp_kms_dev *
 linlondp_kms_attach_cluster(struct device *component_master_dev,
 			    struct linlondp_dev **mdevs, unsigned int n_mdevs);
 void linlondp_kms_detach(struct linlondp_kms_dev *kms);
+
+bool linlondp_kms_fixup_inactive_suspend_state(struct drm_device *drm);
+void linlondp_kms_clear_pre_blank_state(struct drm_device *drm);
 
 #endif /*_LINLONDP_KMS_H_*/

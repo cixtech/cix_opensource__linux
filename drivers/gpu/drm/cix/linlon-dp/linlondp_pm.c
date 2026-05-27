@@ -5,7 +5,6 @@
  * EDID fingerprint capture/match for STR: detect monitor swap during suspend
  * and force userspace re-modeset via discard + hotplug.
  */
-#ifdef CONFIG_PM
 
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -20,6 +19,7 @@
 #include <drm/drm_modeset_helper.h>
 #include <drm/drm_probe_helper.h>
 
+#include "linlondp_kms.h"
 #include "linlondp_pm.h"
 
 #define LP_EDID_HDR_BYTES	16
@@ -205,6 +205,25 @@ void linlondp_pm_discard_and_hotplug(struct device *dev,
 	drm_kms_helper_hotplug_event(drm);
 }
 
+static bool linlondp_pm_suspend_state_has_active_crtc(struct drm_device *drm)
+{
+	struct drm_crtc *crtc;
+	struct drm_crtc_state *crtc_state;
+	int i;
+
+	if (!drm->mode_config.suspend_state ||
+	    IS_ERR(drm->mode_config.suspend_state))
+		return false;
+
+	for_each_new_crtc_in_state(drm->mode_config.suspend_state, crtc,
+				    crtc_state, i) {
+		if (crtc_state->active)
+			return true;
+	}
+
+	return false;
+}
+
 int linlondp_pm_suspend_capture(struct device *dev, struct drm_device *drm,
 				struct linlondp_pm_state *pm)
 {
@@ -229,9 +248,22 @@ int linlondp_pm_suspend_capture(struct device *dev, struct drm_device *drm,
 			 __func__, ret);
 		linlondp_pm_free_conn_fp(pm);
 		pm->capture_failed = false;
+		return ret;
 	}
 
-	return ret;
+	if (linlondp_pm_suspend_state_has_active_crtc(drm)) {
+		linlondp_kms_clear_pre_blank_state(drm);
+	} else if (linlondp_kms_fixup_inactive_suspend_state(drm)) {
+		dev_info(dev,
+			 "%s: suspend_state inactive, using pre-blank snapshot for helper_resume\n",
+			 __func__);
+	} else {
+		dev_info(dev,
+			 "%s: suspend_state has no active CRTC and no pre-blank snapshot\n",
+			 __func__);
+	}
+
+	return 0;
 }
 
 int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
@@ -254,7 +286,8 @@ int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
 	pm->capture_failed = false;
 
 	can_restore = fp_match && drm->mode_config.suspend_state &&
-		      !IS_ERR(drm->mode_config.suspend_state);
+		      !IS_ERR(drm->mode_config.suspend_state) &&
+		      linlondp_pm_suspend_state_has_active_crtc(drm);
 
 	if (can_restore) {
 		dev_info(dev, "%s: EDID identity match, helper_resume\n",
@@ -275,5 +308,3 @@ int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
 	linlondp_pm_discard_and_hotplug(dev, drm);
 	return 0;
 }
-
-#endif /* CONFIG_PM */

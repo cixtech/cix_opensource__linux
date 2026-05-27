@@ -29,8 +29,6 @@ static inline void linlondp_pm_free_conn_fp(struct linlondp_pm_state *pm)
 	pm->suspend_fp_count = 0;
 }
 
-#ifdef CONFIG_PM
-
 int linlondp_pm_capture_conn_fp(struct drm_device *drm,
 				struct linlondp_pm_conn_fp **out,
 				unsigned int *out_count,
@@ -50,21 +48,4 @@ int linlondp_pm_suspend_capture(struct device *dev, struct drm_device *drm,
 int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
 			     struct linlondp_pm_state *pm);
 
-#else /* !CONFIG_PM */
-
-static inline int
-linlondp_pm_suspend_capture(struct device *dev, struct drm_device *drm,
-			    struct linlondp_pm_state *pm)
-{
-	return drm_mode_config_helper_suspend(drm);
-}
-
-static inline int
-linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
-			 struct linlondp_pm_state *pm)
-{
-	return drm_mode_config_helper_resume(drm);
-}
-
-#endif /* CONFIG_PM */
 #endif /* _LINLONDP_PM_H_ */
