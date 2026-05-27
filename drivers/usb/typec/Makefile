@@ -12,4 +12,5 @@ obj-$(CONFIG_TYPEC_STUSB160X) 	+= stusb160x.o
 obj-$(CONFIG_TYPEC_RT1719)	+= rt1719.o
 obj-$(CONFIG_TYPEC_WUSB3801)	+= wusb3801.o
 obj-$(CONFIG_TYPEC_RTS5453)	+= rts5453.o
+obj-$(CONFIG_TYPEC_CS32G053)	+= cs32g053.o
 obj-$(CONFIG_TYPEC)		+= mux/
