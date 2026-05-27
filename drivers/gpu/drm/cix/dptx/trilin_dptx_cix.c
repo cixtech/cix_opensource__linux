@@ -42,7 +42,6 @@
 #include "trilin_phy.h"
 #include "cix_edp_panel.h"
 
-
 struct trilin_dptx_pdata {
 	int eDP;
 };
@@ -172,8 +171,11 @@ static int trilin_dptx_cix_bind(struct device *comp, struct device *master,
 	if (ret)
 		return ret;
 
-	// dpsub->link = device_link_add(drm->dev, comp, DL_FLAG_STATELESS |
-	// 				DL_FLAG_PM_RUNTIME | DL_FLAG_RPM_ACTIVE);
+	/*
+	 * consumer=cluster (master), supplier=dptx (comp): resume supplier first
+	 * (host_init) then cluster discard/hotplug; suspend consumer before supplier.
+	 */
+	dpsub->link = device_link_add(master, comp, 0);
 
 	return 0;
 }
@@ -220,13 +222,14 @@ static int trilin_dptx_cix_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM
-static int trilin_dptx_pm_prepare(struct device *dev)
+static int trilin_dptx_pm_suspend(struct device *dev)
 {
 	/* TODO */
 	struct trilin_dptx_cix_dev *cix_dptx = dev_get_drvdata(dev);
 	struct trilin_dpsub *dpsub = &cix_dptx->dpsub;
 	struct trilin_dp *dp = dpsub->dp;
 
+	dev_dbg(dev, "%s\n", __func__);
 	if (dp)
 		return trilin_dp_pm_prepare(dp);
 	return 0;
@@ -245,47 +248,23 @@ static int trilin_dptx_pm_shutdown(struct device *dev)
 	return 0;
 }
 
-static int trilin_dptx_pm_suspend(struct device *dev)
-{
-	dev_info(dev, "%s\n", __func__);
-	return 0;
-}
-
-static int trilin_dptx_pm_resume_early(struct device *dev)
-{
-	/* TODO */
-	struct trilin_dptx_cix_dev *cix_dptx = dev_get_drvdata(dev);
-	struct trilin_dpsub *dpsub = &cix_dptx->dpsub;
-	struct trilin_dp *dp = dpsub->dp;
-
-	if (dp)
-		return trilin_dp_pm_resume_early(dp);
-	return 0;
-}
-
 static int trilin_dptx_pm_resume(struct device *dev)
 {
-	dev_info(dev, "%s\n", __func__);
-	return 0;
-}
-
-static void trilin_dptx_pm_complete(struct device *dev)
-{
 	/* TODO */
 	struct trilin_dptx_cix_dev *cix_dptx = dev_get_drvdata(dev);
 	struct trilin_dpsub *dpsub = &cix_dptx->dpsub;
 	struct trilin_dp *dp = dpsub->dp;
+	int ret = 0;
 
-	trilin_dp_pm_complete(dp);
+	dev_dbg(dev, "%s\n", __func__);
+	if (dp)
+		ret = trilin_dp_pm_complete(dp);
+
+	return ret;
 }
 
 static const struct dev_pm_ops trilin_dptx_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(trilin_dptx_pm_suspend, trilin_dptx_pm_resume)
-	//SET_RUNTIME_PM_OPS(trilin_dptx_runtime_suspend,
-	//		trilin_dptx_runtime_resume, NULL)
-	.prepare = trilin_dptx_pm_prepare,
-	.complete = trilin_dptx_pm_complete,
-	.resume_early = trilin_dptx_pm_resume_early,
 };
 #endif
 

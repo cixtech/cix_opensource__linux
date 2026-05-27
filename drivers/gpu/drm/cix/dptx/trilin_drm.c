@@ -1349,9 +1349,10 @@ int trilin_dp_drm_init(struct trilin_dpsub *dpsub)
 	if (dp->edp_panel)
 		drm_mode_connector = DRM_MODE_CONNECTOR_eDP;
 
-	ret = drm_connector_init(encoder->dev, connector,
-				 &trilin_dp_connector_funcs,
-				 drm_mode_connector);
+	ret = drm_connector_init_with_ddc(encoder->dev, connector,
+					 &trilin_dp_connector_funcs,
+					 drm_mode_connector,
+					 &dp->aux.ddc);
 	if (ret) {
 		DP_ERR("failed to create the DRM connector\n");
 		return ret;

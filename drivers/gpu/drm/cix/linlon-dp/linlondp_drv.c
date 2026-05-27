@@ -17,6 +17,7 @@
 #include <drm/drm_fbdev_generic.h>
 #include "linlondp_dev.h"
 #include "linlondp_kms.h"
+#include "linlondp_pm.h"
 
 #if IS_ENABLED(CONFIG_ACPI)
 #include <acpi/acpi_bus.h>
@@ -51,6 +52,7 @@ MODULE_PARM_DESC(enable_fb, "Enable/Disable drm framebuffer support");
 struct linlondp_drv {
 	struct linlondp_dev *mdev;
 	struct linlondp_kms_dev *kms;
+	struct linlondp_pm_state pm;
 };
 
 /*
@@ -407,7 +409,7 @@ static int __maybe_unused linlondp_pm_suspend(struct device *dev)
 		return 0;
 	}
 
-	res = drm_mode_config_helper_suspend(&mdrv->kms->base);
+	res = linlondp_pm_suspend_capture(dev, &mdrv->kms->base, &mdrv->pm);
 
 	if (!pm_runtime_status_suspended(dev))
 		linlondp_dev_suspend(mdrv->mdev);
@@ -415,13 +417,6 @@ static int __maybe_unused linlondp_pm_suspend(struct device *dev)
 	mdrv->mdev->enabled_by_gop = 0;
 
 	return res;
-}
-
-static int __maybe_unused linlondp_pm_prepare(struct device *dev)
-{
-	dev_info(dev, "%s\n", __func__);
-
-	return 0;
 }
 
 static int __maybe_unused linlondp_pm_resume(struct device *dev)
@@ -446,7 +441,7 @@ static int __maybe_unused linlondp_pm_resume(struct device *dev)
 	if (!pm_runtime_status_suspended(dev))
 		linlondp_dev_resume(mdrv->mdev);
 
-	return drm_mode_config_helper_resume(&mdrv->kms->base);
+	return linlondp_pm_resume_check(dev, &mdrv->kms->base, &mdrv->pm);
 }
 
 static int __maybe_unused linlondp_pm_restore(struct device *dev)
@@ -499,7 +494,6 @@ static void linlondp_platform_shutdown(struct platform_device *pdev)
 static const struct dev_pm_ops linlondp_pm_ops = {
 	.suspend = linlondp_pm_suspend,
 	.resume = linlondp_pm_resume,
-	.prepare = linlondp_pm_prepare,
 	.restore = linlondp_pm_restore,
 	.freeze = linlondp_pm_suspend,
 	.thaw = linlondp_pm_resume,

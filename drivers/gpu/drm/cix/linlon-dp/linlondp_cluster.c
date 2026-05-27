@@ -43,21 +43,59 @@
 #include <acpi/acpi_bus.h>
 #endif
 
+#include <drm/drm_atomic.h>
+#include <drm/drm_connector.h>
 #include <drm/drm_fb_helper.h>
 #include <drm/drm_fbdev_generic.h>
 #include <drm/drm_module.h>
 #include <drm/drm_modeset_helper.h>
-
+#include <drm/drm_probe_helper.h>
+#include <drm/drm_edid.h>
+#include <linux/i2c.h>
 #include "linlondp_dev.h"
 #include "linlondp_kms.h"
+#include "linlondp_pm.h"
 
 extern bool enable_fb;
 
 struct linlondp_cluster {
 	struct linlondp_kms_dev *kms;
 	struct linlondp_dev *mdevs[LINLONDP_MAX_CLUSTER_DPUS];
+	struct device_link *dpu_links[LINLONDP_MAX_CLUSTER_DPUS];
 	unsigned int n_mdevs;
+	struct linlondp_pm_state pm;
 };
+
+static void linlondp_cluster_dpu_links_del(struct linlondp_cluster *cl)
+{
+	unsigned int i;
+
+	for (i = 0; i < cl->n_mdevs; i++) {
+		if (cl->dpu_links[i]) {
+			device_link_del(cl->dpu_links[i]);
+			cl->dpu_links[i] = NULL;
+		}
+	}
+}
+
+/*
+ * consumer=cluster, supplier=DPU slave: resume DPU (linlondp_dev_resume) before
+ * cluster PM; pairs with trilin_dptx device_link(cluster<-dptx) for DP->DPU->cluster.
+ */
+static int linlondp_cluster_dpu_links_add(struct device *dev,
+					struct linlondp_cluster *cl)
+{
+	unsigned int i;
+
+	for (i = 0; i < cl->n_mdevs; i++) {
+		cl->dpu_links[i] = device_link_add(dev, cl->mdevs[i]->dev, 0);
+		if (!cl->dpu_links[i]) {
+			linlondp_cluster_dpu_links_del(cl);
+			return -ENOMEM;
+		}
+	}
+	return 0;
+}
 
 /*
  * Cluster expects each DPU device to be probed as "slave" and store
@@ -99,10 +137,15 @@ static int linlondp_cluster_bind(struct device *dev)
 		}
 	}
 
+	err = linlondp_cluster_dpu_links_add(dev, cl);
+	if (err)
+		return err;
+
 	cl->kms = linlondp_kms_attach_cluster(dev, cl->mdevs, cl->n_mdevs);
 	if (IS_ERR(cl->kms)) {
 		err = PTR_ERR(cl->kms);
 		cl->kms = NULL;
+		linlondp_cluster_dpu_links_del(cl);
 		for (i = 0; i < cl->n_mdevs; i++) {
 			if (pm_runtime_enabled(cl->mdevs[i]->dev))
 				pm_runtime_disable(cl->mdevs[i]->dev);
@@ -124,11 +167,15 @@ static void linlondp_cluster_unbind(struct device *dev)
 	struct linlondp_cluster *cl = dev_get_drvdata(dev);
 	unsigned int i;
 
-	if (!cl || !cl->kms)
+	if (!cl)
 		return;
 
-	linlondp_kms_detach(cl->kms);
-	cl->kms = NULL;
+	linlondp_cluster_dpu_links_del(cl);
+
+	if (cl->kms) {
+		linlondp_kms_detach(cl->kms);
+		cl->kms = NULL;
+	}
 
 	for (i = 0; i < cl->n_mdevs; i++) {
 		if (pm_runtime_enabled(cl->mdevs[i]->dev))
@@ -458,42 +505,49 @@ static int linlondp_cluster_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-/* Cluster owns KMS; per-DPU PM uses direct_mdev and skips modeset suspend. */
-static int linlondp_cluster_pm_prepare(struct device *dev)
+/*
+ * Cluster owns KMS PM. EDID swap: suspend blob product+serial, resume 16B DDC hdr16.
+ *
+ * Capture failure is non-fatal for system suspend: log a warning and keep going.
+ * The resume path checks pm_capture_failed and forces the discard+hotplug slow
+ * path so userspace re-modesets cleanly (DPTSW-22258 review risk #4).
+ */
+static int __maybe_unused linlondp_cluster_pm_prepare(struct device *dev)
 {
 	struct linlondp_cluster *cl = dev_get_drvdata(dev);
+	struct drm_device *drm;
+
+	dev_info(dev, "%s\n", __func__);
 
 	if (!cl || !cl->kms)
 		return 0;
 
-	return drm_mode_config_helper_suspend(&cl->kms->base);
+	drm = &cl->kms->base;
+	return linlondp_pm_suspend_capture(dev, drm, &cl->pm);
 }
 
-static int linlondp_cluster_resume_modeset(struct device *dev)
+static int __maybe_unused linlondp_cluster_pm_resume(struct device *dev)
 {
 	struct linlondp_cluster *cl = dev_get_drvdata(dev);
+	struct drm_device *drm;
+
+	dev_info(dev, "%s\n", __func__);
 
 	if (!cl || !cl->kms)
 		return 0;
 
-	return drm_mode_config_helper_resume(&cl->kms->base);
-}
-
-static void linlondp_cluster_pm_complete(struct device *dev)
-{
-	linlondp_cluster_resume_modeset(dev);
+	drm = &cl->kms->base;
+	return linlondp_pm_resume_check(dev, drm, &cl->pm);
 }
 
 static const struct dev_pm_ops linlondp_cluster_pm_ops = {
 	.prepare = linlondp_cluster_pm_prepare,
-	.complete = linlondp_cluster_pm_complete,
+	.resume = linlondp_cluster_pm_resume,
 	.freeze = linlondp_cluster_pm_prepare,
-	.thaw = linlondp_cluster_resume_modeset,
+	.thaw = linlondp_cluster_pm_resume,
 	.poweroff = linlondp_cluster_pm_prepare,
-	.restore = linlondp_cluster_resume_modeset,
+	.restore = linlondp_cluster_pm_resume,
 };
-#endif
 
 static const struct of_device_id linlondp_cluster_of_match[] = {
 	{ .compatible = "cix,linlon-display-cluster" },
@@ -508,8 +562,6 @@ struct platform_driver linlondp_cluster_driver = {
 		.name = "linlondp-cluster",
 		.of_match_table = linlondp_cluster_of_match,
 		.acpi_match_table = ACPI_PTR(linlondp_cluster_acpi_match),
-#ifdef CONFIG_PM
 		.pm = &linlondp_cluster_pm_ops,
-#endif
 	},
 };

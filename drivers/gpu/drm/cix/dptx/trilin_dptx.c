@@ -2823,64 +2823,6 @@ static irqreturn_t trilin_dp_irq_handler(int irq, void *data)
  * Common function for trilin_drm.c and trilin_drm_mst.c
  */
 
-int trilin_dp_pm_resume_early(struct trilin_dp *dp)
-{
-	struct drm_connector *connector = &dp->connector.base;
-	struct drm_device *dev = connector->dev;
-	struct drm_modeset_acquire_ctx ctx;
-	struct drm_atomic_state *old_state = dev->mode_config.suspend_state;
-	struct drm_atomic_state *new_state = NULL;
-	struct drm_connector_state *conn_state;
-	struct drm_connector *conn;
-	int ret, i;
-
-	DP_INFO("enter");
-
-	if (IS_ERR(old_state)) {
-		DP_ERR("old state err");
-		return PTR_ERR(old_state);
-	}
-
-	if (!old_state) {
-		DP_ERR("old state null");
-		return -EINVAL;
-	}
-
-	/* force status disconnected */
-	DRM_MODESET_LOCK_ALL_BEGIN(dev, ctx, 0, ret);
-	new_state = drm_atomic_helper_duplicate_state(dev, &ctx);
-
-	if (IS_ERR(new_state)) {
-		DP_ERR("state duplication failed");
-		goto unlock;
-	}
-
-	for_each_new_connector_in_state(new_state, conn, conn_state, i) {
-		ret = drm_atomic_set_crtc_for_connector(conn_state, NULL);
-		if (ret) {
-			DP_ERR("set crtc null failed");
-			goto state_put;
-		}
-		conn->status = connector_status_disconnected;
-		drm_connector_update_edid_property(conn, NULL);
-		drm_mode_prune_invalid(dev, &conn->modes, false);
-	}
-
-	drm_atomic_state_put(old_state);
-	dev->mode_config.suspend_state = new_state;
-	new_state = NULL;
-
-state_put:
-	if (new_state)
-		drm_atomic_state_put(new_state);
-unlock:
-	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
-	/* notify disconnected status */
-	drm_kms_helper_connector_hotplug_event(connector);
-
-	return ret;
-}
-
 int trilin_dp_pm_prepare(struct trilin_dp *dp)
 {
 	struct trilin_dpsub *dpsub = dp->dpsub;
@@ -3059,6 +3001,13 @@ int trilin_dp_prepare(struct trilin_dp *dp)
 	} else if (dp->state & DPTX_STATE_INIT_TRAIN){
 		reset_dp_and_reinit(dp); //enable dp reset...
 		usleep_range(100, 200);
+	}
+
+	if (trilin_dp_get_hpd_state(dp)
+		&& !(dp->state & DPTX_STATE_CONNECTED)) {
+		mutex_unlock(&dp->session_lock);
+		trilin_dp_handle_connect(dp, false);
+		mutex_lock(&dp->session_lock);
 	}
 
 	if (!trilin_dp_is_ready(dp)) {
