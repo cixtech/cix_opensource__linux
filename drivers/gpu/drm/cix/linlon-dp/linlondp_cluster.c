@@ -59,6 +59,17 @@ struct linlondp_cluster {
 	unsigned int n_mdevs;
 };
 
+/*
+ * Cluster expects each DPU device to be probed as "slave" and store
+ * struct linlondp_dev directly in drvdata. If ACPI slave detection mismatches
+ * (e.g. unexpected cluster HID), drvdata may be struct linlondp_drv instead.
+ */
+static bool linlondp_cluster_is_direct_mdev(struct device *dev,
+					    struct linlondp_dev *mdev)
+{
+	return mdev && !IS_ERR(mdev) && mdev->dev == dev;
+}
+
 static int linlondp_cluster_bind(struct device *dev)
 {
 	struct linlondp_cluster *cl = dev_get_drvdata(dev);
@@ -158,25 +169,39 @@ static int linlondp_cluster_acpi_child_cb(struct acpi_device *child, void *data)
 		return -EINVAL;
 
 	phys = acpi_get_first_physical_node(child);
-	if (!phys)
-		return -EPROBE_DEFER;
+	if (!phys) {
+		dev_warn(ctx->cluster_dev,
+			 "ACPI cluster: skip child %s, no physical node (trimmed?)\n",
+			 dev_name(&child->dev));
+		return 0;
+	}
 
 	if (!dev_is_platform(phys)) {
+		dev_warn(ctx->cluster_dev,
+			 "ACPI cluster: skip child %s, non-platform physical node %s\n",
+			 dev_name(&child->dev), dev_name(phys));
 		put_device(phys);
-		return -EINVAL;
+		return 0;
 	}
 
 	mdev = platform_get_drvdata(to_platform_device(phys));
+	if (!linlondp_cluster_is_direct_mdev(phys, mdev)) {
+		dev_warn(ctx->cluster_dev,
+			 "ACPI cluster: skip child %s, invalid DPU drvdata on %s (not slave mdev)\n",
+			 dev_name(&child->dev), dev_name(phys));
+		put_device(phys);
+		return 0;
+	}
 	put_device(phys);
-	if (!mdev)
-		return -EPROBE_DEFER;
-	if (IS_ERR(mdev))
-		return PTR_ERR(mdev);
 
 	ctx->cl->mdevs[ctx->idx] = mdev;
 	err = linlondp_dpu_add_graph_slaves(ctx->cluster_dev, ctx->match, mdev->dev);
-	if (err)
-		return err;
+	if (err) {
+		dev_warn(ctx->cluster_dev,
+			 "ACPI cluster: skip child %s, add_graph_slaves failed: %d\n",
+			 dev_name(&child->dev), err);
+		return 0;
+	}
 	ctx->idx++;
 	return 0;
 }
@@ -205,6 +230,8 @@ static int linlondp_cluster_collect_dpus_acpi_paths(struct device *dev,
 
 	p = kbuf;
 	while ((token = strsep(&p, ","))) {
+		const char *path = token;
+
 		while (*token == ' ' || *token == '\t')
 			token++;
 		if (!*token)
@@ -216,44 +243,51 @@ static int linlondp_cluster_collect_dpus_acpi_paths(struct device *dev,
 		}
 
 		if (ACPI_FAILURE(acpi_get_handle(ACPI_ROOT_OBJECT, token, &h))) {
-			dev_err(dev, "linlon-cluster: bad ACPI path \"%s\"\n", token);
-			kfree(kbuf);
-			return -EINVAL;
+			dev_warn(dev,
+				 "linlon-cluster: skip bad ACPI path \"%s\"\n", path);
+			continue;
 		}
 
 		adev = acpi_fetch_acpi_dev(h);
 		if (!adev) {
-			kfree(kbuf);
-			return -EINVAL;
+			dev_warn(dev,
+				 "linlon-cluster: skip ACPI path \"%s\", no acpi_device\n",
+				 path);
+			continue;
 		}
 
 		phys = acpi_get_first_physical_node(adev);
 		if (!phys) {
-			kfree(kbuf);
-			return -EPROBE_DEFER;
+			dev_warn(dev,
+				 "linlon-cluster: skip ACPI path \"%s\", no physical node (trimmed?)\n",
+				 path);
+			continue;
 		}
 
 		if (!dev_is_platform(phys)) {
+			dev_warn(dev,
+				 "linlon-cluster: skip ACPI path \"%s\", non-platform node %s\n",
+				 path, dev_name(phys));
 			put_device(phys);
-			kfree(kbuf);
-			return -EINVAL;
+			continue;
 		}
 
 		cl->mdevs[n] = platform_get_drvdata(to_platform_device(phys));
+		if (!linlondp_cluster_is_direct_mdev(phys, cl->mdevs[n])) {
+			dev_warn(dev,
+				 "linlon-cluster: skip ACPI path \"%s\", invalid DPU drvdata on %s (not slave mdev)\n",
+				 path, dev_name(phys));
+			put_device(phys);
+			continue;
+		}
 		put_device(phys);
-		if (!cl->mdevs[n]) {
-			kfree(kbuf);
-			return -EPROBE_DEFER;
-		}
-		if (IS_ERR(cl->mdevs[n])) {
-			kfree(kbuf);
-			return PTR_ERR(cl->mdevs[n]);
-		}
 
 		err = linlondp_dpu_add_graph_slaves(dev, match, cl->mdevs[n]->dev);
 		if (err) {
-			kfree(kbuf);
-			return err;
+			dev_warn(dev,
+				 "linlon-cluster: skip ACPI path \"%s\", add_graph_slaves failed: %d\n",
+				 path, err);
+			continue;
 		}
 		n++;
 	}
@@ -311,8 +345,6 @@ static int linlondp_cluster_probe_acpi(struct platform_device *pdev)
 		n = linlondp_cluster_collect_dpus_acpi_children(cluster_adev, dev,
 								cl, &match);
 	if (n < 0) {
-		if (n == -EPROBE_DEFER)
-			return -EPROBE_DEFER;
 		return dev_err_probe(dev, n == -ENOENT ? -EINVAL : n,
 				     "ACPI cluster: no DPUs (paths or CIXH5010 children)\n");
 	}
