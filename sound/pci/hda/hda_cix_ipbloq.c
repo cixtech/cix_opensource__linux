@@ -420,8 +420,13 @@ static int cix_ipbloq_hda_config_init_verbs(struct hdac_bus *bus, unsigned int v
 		return -EINVAL;
 	}
 
-	for (i = 0; i < size; i++)
-		bus->ops->command(bus,  init_verbs[i]);
+	if (init_verbs) {
+		for (i = 0; i < size; i++)
+			bus->ops->command(bus,  init_verbs[i]);
+	} else {
+		dev_err(bus->dev, "unsupport platform\n");
+		return -EINVAL;
+	}
 
 	return 0;
 }
