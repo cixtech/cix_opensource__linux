@@ -2203,6 +2203,42 @@ static int trilin_dp_core_off(struct trilin_dp *dp)
  * link state
  */
 
+static int trilin_dp_edp_panel_prepare(struct trilin_dp *dp)
+{
+	int rc;
+
+	if (!dp->edp_panel || dp->edp_panel_ready)
+		return 0;
+
+	rc = drm_panel_prepare(dp->edp_panel);
+	if (rc) {
+		DP_ERR("edp panel prepare failed: %d\n", rc);
+		return rc;
+	}
+	msleep(50);
+	dp->edp_panel_ready = true;
+	return 0;
+}
+
+static void trilin_dp_edp_panel_unprepare(struct trilin_dp *dp)
+{
+	if (!dp->edp_panel || !dp->edp_panel_ready)
+		return;
+
+	if (drm_panel_unprepare(dp->edp_panel))
+		DP_INFO("edp panel unprepare failed");
+
+	dp->edp_panel_ready = false;
+}
+
+
+static void trilin_dp_edp_drop_panel(struct trilin_dp *dp)
+{
+	trilin_dp_edp_panel_unprepare(dp);
+	dp->edp_panel = NULL;
+}
+
+
 static int trinlin_dp_panel_read_sink_caps(struct trilin_dp *dp)
 {
 	const int ADAPTIVE_SYNC_CAPABILITY = 0x2214;
@@ -2216,6 +2252,28 @@ static int trinlin_dp_panel_read_sink_caps(struct trilin_dp *dp)
 	if (rc) {
 		DP_ERR("read dcpd caps failed...\n");
 		return rc;
+	}
+
+	/*
+	 * DT "edp-panel" may be present on a standard DP port, or no sink may
+	 * be connected. DP_EDP_CONFIGURATION_CAP (DPCD 0x07) non-zero marks a
+	 * real eDP sink; otherwise skip panel power ops and treat as DP.
+	 */
+	if (dp->edp_panel) {
+		if (dp->dpcd[DP_EDP_CONFIGURATION_CAP]) {
+			dev_info(dp->dev,
+				 "%s: detected eDP device (DPCD[0x07]=0x%02x)\n",
+				 __func__, dp->dpcd[DP_EDP_CONFIGURATION_CAP]);
+		} else {
+			dev_info(dp->dev,
+				 "%s: edp-panel in DT but DPCD[0x07]=0, standard DP (clearing edp_panel)\n",
+				 __func__);
+			/*
+			 * host_init may have prepared the panel before DPCD is read;
+			 * balance with unprepare before dropping the pointer.
+			 */
+			trilin_dp_edp_drop_panel(dp);
+		}
 	}
 
 	rc = drm_dp_read_downstream_info(drm_aux, dp->dpcd,
@@ -2464,15 +2522,9 @@ int trilin_dp_host_init(struct trilin_dp *dp)
 		return rc;
 	}
 
-	if (dp->edp_panel) {
-		rc = drm_panel_prepare(dp->edp_panel);
-		if (rc) {
-			DP_ERR("edp panel prepare failed");
-			goto err_out;
-		}
-		msleep(50);
-		dp->edp_panel_ready = true;
-	}
+	rc = trilin_dp_edp_panel_prepare(dp);
+	if (rc)
+		goto err_out;
 
 	dp->state |= DPTX_STATE_INITIALIZED;
 	/* log this as it results from user action of cable connection */
@@ -2515,10 +2567,7 @@ static void trilin_dp_host_deinit(struct trilin_dp *dp)
 		DP_DEBUG("[not initialized]");
 		return;
 	}
-	if (dp->edp_panel) {
-		if (drm_panel_unprepare(dp->edp_panel))
-			DP_INFO("unprepare failed");
-	}
+	trilin_dp_edp_panel_unprepare(dp);
 
 	if (phy->phy_ops)
 		phy->phy_ops->exit(dp);
@@ -3036,12 +3085,9 @@ int trilin_dp_enable(struct trilin_dp *dp, struct trilin_dp_panel *dp_panel)
 		goto end;
 	}
 
-	if (dp->edp_panel && !dp->edp_panel_ready) {
-		drm_panel_prepare(dp->edp_panel);
-		msleep(50);
-		dp->edp_panel_ready = true;
-		DP_INFO("drm_panel_prepare ready");
-	}
+	rc = trilin_dp_edp_panel_prepare(dp);
+	if (rc)
+		goto end;
 
 	//trilin_dp_sink_set_msa_timing_ignore(dp, dp_panel, true);
 
@@ -3165,6 +3211,9 @@ int trilin_dp_init_config(struct trilin_dp *dp)
 		DP_ERR("host_init Failed");
 		goto end2;
 	}
+
+	if (dp->edp_panel && !trilin_dp_get_hpd_state(dp))
+		trilin_dp_edp_drop_panel(dp);
 
 	rc = trilin_dp_hdcp_init(dp->dpsub);
 	if (rc) {

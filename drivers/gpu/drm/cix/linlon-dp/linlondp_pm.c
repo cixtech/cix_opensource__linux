@@ -290,7 +290,7 @@ int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
 		      linlondp_pm_suspend_state_has_active_crtc(drm);
 
 	if (can_restore) {
-		dev_info(dev, "%s: EDID identity match, helper_resume\n",
+		dev_dbg(dev, "%s: EDID identity match, helper_resume\n",
 			 __func__);
 		ret = drm_mode_config_helper_resume(drm);
 		if (ret) {
@@ -302,7 +302,7 @@ int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
 		return 0;
 	}
 
-	dev_info(dev,
+	dev_dbg(dev,
 		 "%s: EDID identity mismatch or no suspend_state, discard+hotplug\n",
 		 __func__);
 	linlondp_pm_discard_and_hotplug(dev, drm);

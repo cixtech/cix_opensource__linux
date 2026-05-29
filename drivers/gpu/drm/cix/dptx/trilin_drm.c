@@ -1049,7 +1049,7 @@ int trilin_dp_encoder_compute_config(struct drm_encoder *encoder,
 
 	link_rate_bw_code = drm_dp_link_rate_to_bw_code(link_rate);
 
-	DP_INFO(
+	DP_DEBUG(
 		"Note: disp->bpc(%d) bpc(%d) bpp(%d) colorspace=%d clock=%d format=0x%0x color_formats=%0x link_rate_bw=%0x %d request_max_bpc=%d\n",
 		info->bpc, bpc, bpp, colorspace, adjusted_mode->clock,
 		color_format, info->color_formats, link_rate_bw_code, link_rate,
