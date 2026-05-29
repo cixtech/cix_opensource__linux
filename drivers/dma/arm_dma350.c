@@ -37,7 +37,6 @@
 #define MAX_BURST_LEN   0xF
 #define LLI_BLOCK_SIZE	(4 * PAGE_SIZE)
 #define CHANNEL_IDX(id)   (0x1000 + id * 0x100)
-#define CMD_LINK_LEN    (512)
 #define MAX_DESC_NUM 16
 #define MAX_CHAN_NUM 8
 #define RCSU_OFFSET 0x10000
@@ -63,6 +62,8 @@ struct dma350_desc_hw {
 	u32 trig_sel;
 	u32 burst_size;
 } __aligned(32);
+
+#define DMA350_LLI_LIMIT	(LLI_BLOCK_SIZE / sizeof(struct dma350_desc_hw))
 
 struct arm_dma350_desc_sw {
 	struct virt_dma_desc vd;
@@ -135,6 +136,7 @@ static u32 desnum[MAX_CHAN_NUM];
 
 struct dma350_cmdlink_gencfg_t *cmdlink_cfg[MAX_CHAN_NUM];
 static u32 *cmd0[MAX_CHAN_NUM];
+static size_t cmd0_size[MAX_CHAN_NUM];
 
 static dma_addr_t phy_cmd0[MAX_CHAN_NUM];
 
@@ -530,10 +532,10 @@ static struct arm_dma350_desc_sw *arm_dma350_alloc_desc_resource(int num,
 {
 	struct arm_dma350_desc_sw *ds;
 	struct arm_dma350_dev *d = to_arm_dma350(chan->device);
-	int lli_limit = LLI_BLOCK_SIZE / sizeof(struct dma350_desc_hw);
 
-	if (num > lli_limit) {
-		dev_err(chan->device->dev, "sg num %d exceed max %d\n", num, lli_limit);
+	if (num > DMA350_LLI_LIMIT) {
+		dev_err(chan->device->dev, "sg num %d exceed max %zu\n",
+			num, DMA350_LLI_LIMIT);
 		return NULL;
 	}
 	ds = kzalloc(sizeof(*ds), GFP_ATOMIC);
@@ -871,13 +873,24 @@ static struct dma_async_tx_descriptor *arm_dma350_prep_dma_cyclic(struct dma_cha
 	struct arm_dma350_dev *d = to_arm_dma350(chan->device);
 	struct arm_dma350_desc_sw *ds;
 	dma_addr_t src = 0, dst = 0;
-	size_t num_periods = buf_len / period_len;
+	size_t num_periods;
 	size_t buf = 0, cmd_num = 0;
 	u32 offset = 0, bit = 0;
 	int ret = 0;
 
-	if (period_len > DMA_MAX_SIZE) {
-		dev_err(chan->device->dev, "maximum period size exceeded\n");
+	if (!buf_len || !period_len || period_len > DMA_MAX_SIZE ||
+	    buf_len % period_len) {
+		dev_err(chan->device->dev,
+			"invalid cyclic buffer: buf_len=%zu period_len=%zu\n",
+			buf_len, period_len);
+		return NULL;
+	}
+
+	num_periods = buf_len / period_len;
+	if (num_periods > DMA350_LLI_LIMIT) {
+		dev_err(chan->device->dev,
+			"cyclic periods %zu exceed max %zu\n",
+			num_periods, DMA350_LLI_LIMIT);
 		return NULL;
 	}
 
@@ -894,25 +907,23 @@ static struct dma_async_tx_descriptor *arm_dma350_prep_dma_cyclic(struct dma_cha
 
 	/*if channel id is 0xFF,it means we should use dynamic channel*/
 	if ((DMA350_DYNAMIC_CH(c->id)) && (arm_dma350_find_idle_channel(chan))) {
-		pm_runtime_put_noidle(d->slave.dev);
-		return NULL;
+		goto err_runtime_put;
 	}
 
 	ret = arm_dma350_cmdlink_cfg_create(c->id, num_periods);
 	if (ret) {
 		pr_err("cmdlink_cfg create failed\n");
-		return NULL;
+		goto err_runtime_put;
 	}
 
-	if (arm_dma350_pre_config_cyclic(c, dir)) {
-		pm_runtime_put_noidle(d->slave.dev);
-		return NULL;
+	ret = arm_dma350_pre_config_cyclic(c, dir);
+	if (ret) {
+		goto err_free_cmdlink_cfg;
 	}
 
 	ds = arm_dma350_alloc_desc_resource(num_periods, chan);
 	if (!ds) {
-		pm_runtime_put_noidle(d->slave.dev);
-		return NULL;
+		goto err_free_cmdlink_cfg;
 	}
 
 	c->cyclic = 1;
@@ -958,7 +969,13 @@ static struct dma_async_tx_descriptor *arm_dma350_prep_dma_cyclic(struct dma_cha
 					   (period_len / c->transize));
 		cmd_num++;
 	}
-	cmd0[c->id] = dma_alloc_coherent(chan->device->dev, CMD_LINK_LEN * sizeof(u32), &phy_cmd0[c->id], GFP_ATOMIC);
+	cmd0_size[c->id] = sizeof(struct dma350_cmdlink_gencfg_t) * num_periods;
+	cmd0[c->id] = dma_alloc_coherent(chan->device->dev, cmd0_size[c->id], &phy_cmd0[c->id], GFP_ATOMIC);
+	if (!cmd0[c->id]) {
+		dev_err(chan->device->dev, "failed to allocate cmd0 for channel %d\n", c->id);
+		goto err_free_desc;
+	}
+
 	cmd_num = 0;
 	while (cmd_num < num_periods) {
 		/* cmd linklist prepare*/
@@ -979,6 +996,23 @@ static struct dma_async_tx_descriptor *arm_dma350_prep_dma_cyclic(struct dma_cha
 	ds->size = buf_len;
 
 	return vchan_tx_prep(&c->vc, &ds->vd, flags);
+
+err_free_desc:
+	if (ds) {
+		dma_pool_free(d->pool, ds->desc_hw, ds->desc_hw_lli);
+		kfree(ds);
+	}
+
+err_free_cmdlink_cfg:
+	arm_dma350_cmdlink_cfg_destory(c->id);
+
+err_runtime_put:
+	if (c->is_used_runtime) {
+		pm_runtime_put_noidle(d->slave.dev);
+		c->is_used_runtime = false;
+	}
+	c->cyclic = 0;
+	return NULL;
 }
 
 static int arm_dma350_config(struct dma_chan *chan,
@@ -1046,7 +1080,11 @@ static int arm_dma350_terminate_all(struct dma_chan *chan)
 	spin_unlock_irqrestore(&c->vc.lock, flags);
 
 	if (c->cyclic) {
-		dma_free_coherent(chan->device->dev, CMD_LINK_LEN * sizeof(u32), cmd0[c->id], phy_cmd0[c->id]);
+		if (cmd0[c->id]) {
+			dma_free_coherent(chan->device->dev, cmd0_size[c->id],
+					  cmd0[c->id], phy_cmd0[c->id]);
+			cmd0[c->id] = NULL;
+		}
 		arm_dma350_cmdlink_cfg_destory(c->id);
 	}
 
