@@ -79,6 +79,7 @@ static int cdnsp_probe(struct platform_device *pdev)
 	struct cdns *cdns;
 	void __iomem *regs;
 	int ret;
+	struct resource irqres;
 
 	cdns = devm_kzalloc(dev, sizeof(*cdns), GFP_KERNEL);
 	if (!cdns)
@@ -99,6 +100,13 @@ static int cdnsp_probe(struct platform_device *pdev)
 	cdns->xhci_res[0].end = ret;
 	cdns->xhci_res[0].flags = IORESOURCE_IRQ | irq_get_trigger_type(ret);
 	cdns->xhci_res[0].name = "host";
+
+	if (has_acpi_companion(dev)) {
+		ret = acpi_irq_get(ACPI_HANDLE(dev), 0, &irqres);
+		if (ret == 0) {
+			cdns->xhci_res[0].flags = irqres.flags;
+		}
+	}
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "xhci");
 	if (!res) {
