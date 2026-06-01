@@ -19,6 +19,8 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/pm_runtime.h>
+#include <linux/usb.h>
+#include <linux/usb/hcd.h>
 
 #include "core.h"
 #include "host-export.h"
@@ -500,7 +502,23 @@ static irqreturn_t cdns_wakeup_irq(int irq, void *data)
 		return IRQ_HANDLED;
 	}
 
-	return IRQ_NONE;
+	/*
+	 * If HCD is not accessible (e.g. during shutdown after clocks are
+	 * disabled), return IRQ_HANDLED to prevent bad IRQ detection.
+	 *
+	 * When PDC0 is used as the interrupt parent, the wakeup IRQ shares
+	 * the line with the host IRQ. In normal operation (not in LPM),
+	 * return IRQ_HANDLED to avoid spurious IRQ detection by the kernel.
+	 */
+	if (cdns->role == USB_ROLE_HOST && cdns->xhci_device) {
+		struct usb_hcd *hcd = platform_get_drvdata(cdns->xhci_device);
+
+		if (hcd && !HCD_HW_ACCESSIBLE(hcd))
+			return IRQ_HANDLED;
+	}
+
+	/* Normal operation: let the host handler process the interrupt */
+	return IRQ_HANDLED;
 }
 
 /**
