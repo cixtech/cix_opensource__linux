@@ -21,6 +21,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
+#include <linux/acpi.h>
 
 #include "core.h"
 #include "host-export.h"
@@ -563,8 +564,8 @@ int cdns_init(struct cdns *cdns)
 	if (device_property_read_bool(dev, "cdnsp-vbus-override"))
 		cdns->vbus_override = true;
 
-	/* patch for mg that doesn't enable wakeup */
-	if (!(cdns->xhci_res[0].flags & IORESOURCE_IRQ_WAKECAPABLE)) {
+	if (has_acpi_companion(cdns->dev) &&
+	    !(cdns->xhci_res[0].flags & IORESOURCE_IRQ_WAKECAPABLE)) {
 		dev_info(cdns->dev, "%s, disable runtime pm \n", __func__);
 		cdns->pdata->quirks &= ~CDNS3_DEFAULT_PM_RUNTIME_ALLOW;
 	}
