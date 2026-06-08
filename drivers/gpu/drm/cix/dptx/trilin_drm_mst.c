@@ -688,6 +688,7 @@ static void trilin_mst_encoder_enable(struct drm_encoder *encoder)
 	if (rc) {
 		DP_ERR("[%d] DP display prepare failed, rc=%d\n",
 		       mst_encoder->id, rc);
+		mutex_unlock(&mst->mst_lock);
 		return;
 	}
 
@@ -726,6 +727,7 @@ static void trilin_mst_encoder_disable(struct drm_encoder *encoder)
 
 	if (!(dp->state & DPTX_STATE_INITIALIZED)) {
 		DP_DEBUG("[not init]");
+		mutex_unlock(&mst->mst_lock);
 		return;
 	}
 
@@ -846,28 +848,27 @@ int trilin_drm_mst_encoder_init(struct trilin_dp *dp, int conn_base_id)
 	mutex_init(&dp->mst.private_info.mst_lock);
 	mutex_init(&dp->mst.private_info.poll_irq_lock);
 	/*
-	 * MST virtual encoders must allow every cluster CRTC that can feed
-	 * this DP; otherwise atomic check fails with "incompatible with [CRTC:…]".
+	 * MST virtual encoders: use the same CRTC mask as the SST encoder
+	 * (from DT graph / preset), merged with CRTCs registered so far.
+	 * Do not force (1 << num_crtc) - 1 — that confuses mutter when MST
+	 * connectors expose every cluster CRTC as routable.
 	 */
 	{
 		u32 mst_possible_crtcs = 0;
 		struct drm_crtc *crtc;
+		struct trilin_dpsub *dpsub = dp->dpsub;
 
-		drm_for_each_crtc(crtc, dp->drm)
-			mst_possible_crtcs |= drm_crtc_mask(crtc);
+		if (dpsub && dpsub->preset_possible_crtcs)
+			mst_possible_crtcs = dpsub->preset_possible_crtcs;
+		else if (dp->dev && dp->dev->of_node)
+			mst_possible_crtcs = drm_of_find_possible_crtcs(
+				dp->drm, dp->dev->of_node);
 
-		/*
-		 * CRTC list can be partial when this runs (DP bind vs KMS init).
-		 * Always OR in bits [0 .. num_crtc-1] so cluster CRTCs like crtc-2
-		 * are allowed even if drm_for_each_crtc only saw crtc-0/1 so far.
-		 */
-		if (dp->drm->mode_config.num_crtc > 0) {
-			unsigned int n = min_t(unsigned int,
-					       (unsigned int)dp->drm->mode_config.num_crtc,
-					       31u);
-
-			mst_possible_crtcs |= (1U << n) - 1U;
+		if (!mst_possible_crtcs) {
+			drm_for_each_crtc(crtc, dp->drm)
+				mst_possible_crtcs |= drm_crtc_mask(crtc);
 		}
+
 		if (!mst_possible_crtcs) {
 			unsigned int n = dp->max_streams;
 
@@ -877,13 +878,26 @@ int trilin_drm_mst_encoder_init(struct trilin_dp *dp, int conn_base_id)
 			mst_possible_crtcs = (1U << n) - 1U;
 		}
 
+		DP_MST_INFO("mst encoder pool possible_crtcs=0x%x\n",
+			    mst_possible_crtcs);
+
 		for (i = 0; i < dp->max_mst_encoders; i++) {
+			u32 enc_crtcs = BIT(i) & mst_possible_crtcs;
+
 			mst_encoder = &dp->mst.private_info.mst_encoders[i];
 			encoder = &mst_encoder->base;
 			mst_encoder->id = i;
 			mst_encoder->dp = dp;
 			mst_encoder->drm = dp->drm;
-			encoder->possible_crtcs = mst_possible_crtcs;
+			/*
+			 * One MST stream per DP video input (port@0/1): stream
+			 * i uses CRTC bit i when present in the DT graph pool.
+			 */
+			if (!enc_crtcs)
+				enc_crtcs = mst_possible_crtcs;
+			encoder->possible_crtcs = enc_crtcs;
+			DP_MST_INFO("mst encoder %d possible_crtcs=0x%x\n", i,
+				    enc_crtcs);
 
 			drm_encoder_init(mst_encoder->drm, encoder,
 					 &trilin_dp_mst_enc_funcs,

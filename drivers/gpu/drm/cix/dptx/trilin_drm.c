@@ -451,7 +451,7 @@ trilin_dp_connector_mode_valid(struct drm_connector *connector,
 	}
 
 	if (pixel_per_cycle == 1 && clock > TRILIN_MAX_FREQ) {
-		DP_INFO("filtered mode(%s@%d) for high pixel rate\n",
+		DP_DEBUG("filtered mode(%s@%d) for high pixel rate\n",
 			mode->name, clock);
 		drm_mode_debug_printmodeline(mode);
 		return MODE_CLOCK_HIGH;
@@ -460,7 +460,7 @@ trilin_dp_connector_mode_valid(struct drm_connector *connector,
 	/* Check with link rate and lane count */
 	rate = trilin_dp_max_rate(max_rate, max_lanes, minbpp);
 	if (clock > rate) {
-		DP_INFO("filtered mode (%s@%d) for high bandwidth rate=%d: pixel_per_cycle=%d\n",
+		DP_DEBUG("filtered mode (%s@%d) for high bandwidth rate=%d: pixel_per_cycle=%d\n",
 			mode->name, clock, rate, pixel_per_cycle);
 		drm_mode_debug_printmodeline(mode);
 		return MODE_CLOCK_HIGH;

@@ -368,9 +368,14 @@ static const struct drm_plane_funcs linlondp_plane_funcs = {
 #endif /*CONFIG_DEBUG_FS*/
 };
 
-/* for linlondp, which is pipeline can be share between crtcs */
+/*
+ * Pipeline layers may appear as slave on a neighbouring CRTC (compiz / SBS),
+ * which makes overlay possible_crtcs span two CRTCs on the same DPU.  Primary
+ * planes must stay exclusive to the CRTC where the pipeline is master so
+ * compositors (e.g. stock mutter) can pick the correct plane per CRTC.
+ */
 static u32 get_possible_crtcs(struct linlondp_kms_dev *kms,
-			      struct linlondp_pipeline *pipe)
+			      struct linlondp_pipeline *pipe, bool master_only)
 {
 	struct linlondp_crtc *crtc;
 	u32 possible_crtcs = 0;
@@ -379,11 +384,29 @@ static u32 get_possible_crtcs(struct linlondp_kms_dev *kms,
 	for (i = 0; i < kms->n_crtcs; i++) {
 		crtc = &kms->crtcs[i];
 
-		if ((pipe == crtc->master) || (pipe == crtc->slave))
+		if (pipe == crtc->master)
+			possible_crtcs |= BIT(i);
+		else if (!master_only && pipe == crtc->slave)
 			possible_crtcs |= BIT(i);
 	}
 
 	return possible_crtcs;
+}
+
+void linlondp_planes_refresh_possible_crtcs(struct linlondp_kms_dev *kms)
+{
+	struct drm_plane *plane;
+
+	if (!kms->base.mode_config.num_total_plane)
+		return;
+
+	drm_for_each_plane(plane, &kms->base) {
+		struct linlondp_plane *kplane = to_kplane(plane);
+		struct linlondp_pipeline *pipe = kplane->layer->base.pipeline;
+		bool master_only = (plane->type == DRM_PLANE_TYPE_PRIMARY);
+
+		plane->possible_crtcs = get_possible_crtcs(kms, pipe, master_only);
+	}
 }
 
 static void linlondp_set_crtc_plane_mask(struct linlondp_kms_dev *kms,
@@ -557,6 +580,8 @@ static int linlondp_plane_add(struct linlondp_kms_dev *kms,
 	struct linlondp_plane *kplane;
 	struct drm_plane *plane;
 	u32 *formats, n_formats = 0;
+	u32 plane_type;
+	bool master_only;
 	int err;
 
 	kplane = kzalloc(sizeof(*kplane), GFP_KERNEL);
@@ -570,11 +595,15 @@ static int linlondp_plane_add(struct linlondp_kms_dev *kms,
 	formats = linlondp_get_layer_fourcc_list(&mdev->fmt_tbl,
 						 layer->layer_type, &n_formats);
 
+	plane_type = get_plane_type(kms, c);
+	master_only = (plane_type == DRM_PLANE_TYPE_PRIMARY);
+
 	err = drm_universal_plane_init(&kms->base, plane,
-				       get_possible_crtcs(kms, c->pipeline),
+				       get_possible_crtcs(kms, c->pipeline,
+							  master_only),
 				       &linlondp_plane_funcs, formats,
 				       n_formats, linlondp_supported_modifiers,
-				       get_plane_type(kms, c), "%s", c->name);
+				       plane_type, "%s", c->name);
 
 	linlondp_put_fourcc_list(formats);
 

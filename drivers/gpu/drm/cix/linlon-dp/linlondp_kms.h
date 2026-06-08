@@ -342,6 +342,7 @@ int linlondp_kms_add_private_objs(struct linlondp_kms_dev *kms,
 int linlondp_kms_add_planes_multi(struct linlondp_kms_dev *kms,
 				  struct linlondp_dev **mdevs,
 				  unsigned int n_mdevs);
+void linlondp_planes_refresh_possible_crtcs(struct linlondp_kms_dev *kms);
 int linlondp_kms_add_private_objs_multi(struct linlondp_kms_dev *kms,
 					struct linlondp_dev **mdevs,
 					unsigned int n_mdevs);

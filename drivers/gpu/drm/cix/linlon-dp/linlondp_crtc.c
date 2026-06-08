@@ -976,6 +976,8 @@ int linlondp_kms_setup_crtcs(struct linlondp_kms_dev *kms,
 		}
 	}
 
+	linlondp_planes_refresh_possible_crtcs(kms);
+
 	return 0;
 }
 
