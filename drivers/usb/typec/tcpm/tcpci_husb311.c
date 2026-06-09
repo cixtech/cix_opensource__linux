@@ -271,6 +271,12 @@ static const struct of_device_id husb311_of_match[] = {
 MODULE_DEVICE_TABLE(of, husb311_of_match);
 #endif
 
+static const struct acpi_device_id husb311_acpi_match[] = {
+	{ "CIXH200E", 0 },
+	{ }
+};
+MODULE_DEVICE_TABLE(acpi, husb311_acpi_match);
+
 static const struct dev_pm_ops husb311_pm_ops = {
 	.suspend = husb311_pm_suspend,
 	.resume = husb311_pm_resume,
@@ -281,6 +287,7 @@ static struct i2c_driver husb311_i2c_driver = {
 		.name = "husb311",
 		.pm = &husb311_pm_ops,
 		.of_match_table = of_match_ptr(husb311_of_match),
+		.acpi_match_table = ACPI_PTR(husb311_acpi_match),
 	},
 	.probe = husb311_probe,
 	.remove = husb311_remove,
