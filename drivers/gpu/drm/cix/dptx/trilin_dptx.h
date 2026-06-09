@@ -451,6 +451,7 @@ struct trilin_dp {
 	u32 aux_clock_divider;
 	u32 delay_after_hpd;
 	u32 enabled_by_gop;
+	u32 gop_plug_notify;
 	struct delayed_work hpd_event_work;
 	struct delayed_work hpd_irq_work;
 	enum drm_connector_status status;
