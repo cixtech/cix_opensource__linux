@@ -1849,6 +1849,7 @@ static int cdnsp_gen_setup(struct cdnsp_device *pdev)
 	 */
 	reg = readl(&pdev->port3x_regs->mode_2);
 	reg &= ~CFG_3XPORT_U1_PIPE_CLK_GATE_EN;
+	reg &= ~CFG_3XPORT_U2_PIPE_CLK_GATE_EN;
 	writel(reg, &pdev->port3x_regs->mode_2);
 
 	return 0;
@@ -1968,6 +1969,8 @@ static int cdnsp_gadget_suspend(struct cdns *cdns, bool do_wakeup)
 	struct cdnsp_device *pdev = cdns->gadget_dev;
 	unsigned long flags;
 
+	/* Avoid interrupts after system suspend */
+	disable_irq(cdns->dev_irq);
 	if (pdev->link_state == XDEV_U3)
 		return 0;
 
@@ -1986,8 +1989,10 @@ static int cdnsp_gadget_resume(struct cdns *cdns, bool hibernated)
 	unsigned long flags;
 	int ret;
 
-	if (!pdev->gadget_driver)
+	if (!pdev->gadget_driver) {
+		enable_irq(cdns->dev_irq);
 		return 0;
+	}
 
 	spin_lock_irqsave(&pdev->lock, flags);
 	max_speed = pdev->gadget_driver->max_speed;
@@ -2002,6 +2007,7 @@ static int cdnsp_gadget_resume(struct cdns *cdns, bool hibernated)
 
 	spin_unlock_irqrestore(&pdev->lock, flags);
 
+	enable_irq(cdns->dev_irq);
 	return ret;
 }
 

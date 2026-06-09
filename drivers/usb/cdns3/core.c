@@ -26,6 +26,7 @@
 #include "core.h"
 #include "host-export.h"
 #include "drd.h"
+#include "cdnsp-gadget.h"
 
 static int cdns_idle_init(struct cdns *cdns);
 
@@ -666,6 +667,17 @@ int cdns_resume(struct cdns *cdns)
 
 			if (ret)
 				return ret;
+		}
+	}
+
+	if (cdns->role == USB_ROLE_DEVICE) {
+		struct cdnsp_device *pdev = cdns->gadget_dev;
+		if (pdev && pdev->cdnsp_state & CDNSP_STATE_DYING) {
+			dev_dbg(cdns->dev, "Controller timeout, attempting restore...\n");
+			if (cdns->roles[cdns->role]->restore)
+				cdns->roles[cdns->role]->restore(cdns);
+			enable_irq(cdns->dev_irq);
+			return 0;
 		}
 	}
 

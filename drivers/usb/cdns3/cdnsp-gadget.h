@@ -481,6 +481,7 @@ struct cdnsp_3xport_cap {
 /* Extended Capability Header for 3XPort Configuration Registers. */
 #define D_XEC_CFG_3XPORT_CAP		0xC0
 #define CFG_3XPORT_SSP_SUPPORT		BIT(31)
+#define CFG_3XPORT_U2_PIPE_CLK_GATE_EN	BIT(1)
 #define CFG_3XPORT_U1_PIPE_CLK_GATE_EN	BIT(0)
 
 /* Revision Extended Capability ID */
