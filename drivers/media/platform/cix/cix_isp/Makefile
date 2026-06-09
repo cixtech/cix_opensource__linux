@@ -11,6 +11,15 @@ ccflags-y += -I$(srctree)/drivers/misc/
 ccflags-y += -DARMCB_CAM_KO
 ccflags-y += -DARMCB_CAM_AHB
 
+#ARMCB_CSI_DMA_DUMP_RAW ?= 1
+
+# CSIDMA raw dump (default off): make ... ARMCB_CSI_DMA_DUMP_RAW=1
+ifeq ($(ARMCB_CSI_DMA_DUMP_RAW),1)
+ccflags-y += -DARMCB_CSI_DMA_DUMP_RAW=1
+else
+ccflags-y += -DARMCB_CSI_DMA_DUMP_RAW=0
+endif
+
 obj-$(CONFIG_CAMERA_ARMCB) += armcb_isp.o
 armcb_isp-objs = sensor/armcb_sensor.o \
 					common/armcb_camera_io_drv.o \
@@ -28,7 +37,6 @@ armcb_isp-objs = sensor/armcb_sensor.o \
 					platform/logger/system_logger.o \
 					cixvihw/cix_vi_hw.o \
 					armcb_isp_entry.o
-
 clean:
 	find . -name '*.o' -type f -print -exec rm -rf {} \;
 	find . -name '*.mod.c' -type f -print -exec rm -rf {} \;

@@ -35,6 +35,16 @@ struct armcb_ko_entry {
 	bool is_init;
 };
 
+#if ARMCB_CSI_DMA_DUMP_RAW
+struct armcb_ko_entry g_ko_entries[] = {
+	{ armcb_get_cam_io_drv_instance,         armcb_cam_io_drv_destroy,         NULL, false },
+	{ armcb_get_v4l2_cfg_driver_instance,    armcb_v4l2_cfg_driver_destroy,    NULL, false },
+	{ armcb_get_sensor_driver_instance,      armcb_sensor_driver_destroy,      NULL, false },
+	{ armcb_get_isp_driver_instance,         armcb_isp_driver_destroy,         NULL, false },
+	{ armcb_get_motor_driver_instance,       armcb_motor_driver_destroy,       NULL, false },
+	{ cix_vi_hw_instance,                    cix_vi_hw_destroy,                NULL, false },
+};
+#else
 struct armcb_ko_entry g_ko_entries[] = {
 	// 1.init cfg driver(video0) firstly
 	{ armcb_get_v4l2_cfg_driver_instance,    armcb_v4l2_cfg_driver_destroy,    NULL, false },
@@ -45,6 +55,7 @@ struct armcb_ko_entry g_ko_entries[] = {
 	{ armcb_get_cam_io_drv_instance,         armcb_cam_io_drv_destroy,         NULL, false },
 	{ cix_vi_hw_instance,                    cix_vi_hw_destroy,                NULL, false },
 };
+#endif
 
 static int __init armcb_isp_submodules_init(void)
 {

@@ -34,6 +34,9 @@
 #include <media/v4l2-fh.h>
 #include <media/v4l2-event.h>
 #include "armcb_isp_driver.h"
+#if ARMCB_CSI_DMA_DUMP_RAW
+#include "armcb_csi_dma_dump.h"
+#endif
 #include "armcb_v4l2_core.h"
 #include "armcb_v4l_sd.h"
 #include "armcb_vb2.h"
@@ -56,6 +59,13 @@
 #define ARMCB_MODULE_NAME "armcb_v4l2_config"
 
 #ifdef CONFIG_PLAT_BBOX
+
+#if ARMCB_CSI_DMA_DUMP_RAW
+/* IMX219 3280x2464: CSIDMA LINE_STRIDE 0xF00 (3840 bytes/line) */
+//#define CSIDMA_SIZE (3840U * 2464U * 2U)
+#define CSIDMA_SIZE (4224U * 3136U * 2U)
+#endif
+
 
 u64 g_isp_addr;
 
@@ -1946,7 +1956,12 @@ static int armcb_v4l2_config_probe(struct platform_device *pdev)
 	tasklet_init(&p_v4l_config_dev->buffer_done_task, buffer_done_handler,
 		     0UL);
 
+
 #ifdef CONFIG_PLAT_BBOX
+#if ARMCB_CSI_DMA_DUMP_RAW
+	ret = armcb_csi_dma_dump_set_buffer_size(CSIDMA_SIZE, &pdev->dev);
+#endif
+
 //#if 0
 	init_completion(&g_rdr_dump_comp);
 
@@ -1985,7 +2000,9 @@ static int armcb_v4l2_config_remove(struct platform_device *pdev)
 		devm_kfree(&pdev->dev, p_v4l_config_dev);
 	}
 	p_v4l_config_dev = NULL;
-
+#if ARMCB_CSI_DMA_DUMP_RAW
+	ret = armcb_csi_dma_dump_teardown(CSIDMA_SIZE, &pdev->dev);
+#endif
 	return ret;
 }
 

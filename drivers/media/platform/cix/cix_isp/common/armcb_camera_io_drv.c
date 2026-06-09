@@ -60,6 +60,10 @@ static struct cam_buf_table buf_tbl;
 
 DEFINE_MUTEX(phy_mutex);
 
+#if ARMCB_CSI_DMA_DUMP_RAW
+struct device *mem_dev;
+#endif
+
 #ifdef ARMCB_CAM_AHB
 
 u32 armcb_ahb_pmctrl_res_read_reg(u32 offset)
@@ -1197,6 +1201,10 @@ static int armcb_ispmem_probe(struct platform_device *pdev)
 
 	mutex_init(&cma_buf_ctl.m_lock);
 	ispmem_cma_mem_init();
+
+#if ARMCB_CSI_DMA_DUMP_RAW
+	mem_dev = &pdev->dev;
+#endif
 
 	mutex_init(&buf_tbl.m_lock);
 	res = cam_mem_tbl_init();

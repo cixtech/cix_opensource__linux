@@ -23,6 +23,9 @@
 #include "armcb_v4l2_stream.h"
 #include "armcb_v4l_sd.h"
 #include "armcb_vb2.h"
+#if ARMCB_CSI_DMA_DUMP_RAW
+#include "armcb_csi_dma_dump.h"
+#endif
 #include "asm-generic/errno-base.h"
 #include "isp_hw_ops.h"
 #include "linux/types.h"
@@ -509,6 +512,10 @@ static int armcb_v4l2_streamon(struct file *file, void *priv,
 		usleep_range(1000,1000 + 100);
 	}
 
+#if ARMCB_CSI_DMA_DUMP_RAW
+	armcb_csi_dma_dump_schedule_delayed();
+#endif
+
 	return rc;
 }
 
@@ -518,6 +525,10 @@ static int armcb_isp_streamoff(struct file *file)
 	int outport_idx = -1;
 	int loop;
 	int ret = -1;
+
+#if ARMCB_CSI_DMA_DUMP_RAW
+	armcb_csi_dma_dump_cancel_delayed();
+#endif
 
 	armcb_i7_disable_int();
 	/*disbale the stream operate ram,if not smmu error maybe occur */
@@ -578,6 +589,10 @@ static int armcb_v4l2_streamoff(struct file *file, void *priv,
 	armcb_v4l2_stream_t *pstream = dev->pstreams[sp->stream_id];
 	int outport_idx = -1;
 	int ret = 0;
+
+#if ARMCB_CSI_DMA_DUMP_RAW
+	armcb_csi_dma_dump_cancel_delayed();
+#endif
 
 	armcb_i7_disable_int();
 	armcb_i7_disable_vin();
