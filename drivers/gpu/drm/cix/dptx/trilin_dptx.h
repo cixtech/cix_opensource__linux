@@ -587,6 +587,7 @@ void trilin_dp_psr_enable(struct trilin_dp *dp,
 	struct trilin_dp_panel *dp_panel);
 void trilind_dp_psr_disable(struct trilin_dp *dp,
 	struct trilin_dp_panel *dp_panel);
+void trilin_dp_psr_force_off(struct trilin_dp *dp);
 bool trilin_dp_plugged_status(struct trilin_dp *dp);
 bool trilin_dp_link_trained(struct trilin_dp *dp);
 //---------------------------------------------------------

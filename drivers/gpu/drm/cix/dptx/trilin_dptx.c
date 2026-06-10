@@ -1408,6 +1408,26 @@ err:
 	dp->psr_default_on = 0;
 }
 
+/*
+ * Tear down PSR without waiting for the sink to resync. Used on the
+ * full-disable path (suspend / unplug / shutdown) where the DPU has
+ * already stopped feeding pixels: the sink can never leave
+ * DP_PSR_SINK_ACTIVE_RFB on its own, so the wait in
+ * trilind_dp_psr_disable() would always time out. Drop PSR via DPCD
+ * directly; the subsequent stream_off call becomes a no-op.
+ */
+void trilin_dp_psr_force_off(struct trilin_dp *dp)
+{
+	if (!dp->psr.active)
+		return;
+
+	drm_dp_dpcd_writeb(&dp->aux, DP_PSR_EN_CFG, 0);
+	trilin_dp_write(dp, TRILIN_DPTX_VIDEO_STREAM_ENABLE, 0x1);
+	trilin_dp_write(dp, TRILIN_DPTX_SRC0_PSR_STATE, 0x0);
+
+	dp->psr.active = false;
+}
+
 void trilind_dp_psr_disable(struct trilin_dp *dp,
 		struct trilin_dp_panel *dp_panel)
 {

@@ -732,7 +732,7 @@ static void trilin_dp_encoder_disable(struct drm_encoder *encoder,
 	struct trilin_dp *dp = encoder_to_dp(encoder);
 	struct trilin_dp_panel *dp_panel = &dp->dp_panel;
 	struct drm_crtc *crtc;
-	struct drm_crtc_state *new_crtc_state;
+	struct drm_crtc_state *new_crtc_state = NULL;
 
 	if (!(dp->state & DPTX_STATE_INITIALIZED)) {
 		DP_DEBUG("[not init]");
@@ -749,6 +749,14 @@ static void trilin_dp_encoder_disable(struct drm_encoder *encoder,
 		trilin_dp_psr_enable(dp, dp_panel);
 		return;
 	}
+
+	/*
+	 * Full disable while the sink is still parked in PSR (suspend,
+	 * unplug, shutdown): drop PSR via DPCD before stream_off tries to
+	 * wait for sink resync that will never happen.
+	 */
+	if (dp->psr.active)
+		trilin_dp_psr_force_off(dp);
 
 	DP_INFO("enter\n");
 	rc = trilin_dp_pre_disable(dp, dp_panel);
