@@ -401,6 +401,7 @@ struct trilin_dp_psr {
 	bool psr2_enabled;
 	bool main_link_keep_active;
 	bool link_retrain;
+	ktime_t allow_after;	/* PSR entry hold-off, see trilin_dp_psr_enable() */
 };
 
 /**

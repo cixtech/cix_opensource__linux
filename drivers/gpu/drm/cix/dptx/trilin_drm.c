@@ -720,6 +720,9 @@ static void trilin_dp_encoder_enable(struct drm_encoder *encoder,
 	/*update hdr and hdcp ? */
 	trilin_dp_post_enable(dp, dp_panel);
 	dp->enabled_by_gop = 0;
+
+	/* Arm PSR entry hold-off; see trilin_dp_psr_enable(). */
+	dp->psr.allow_after = ktime_add_ms(ktime_get(), 1000);
 }
 
 static void trilin_dp_encoder_disable(struct drm_encoder *encoder,

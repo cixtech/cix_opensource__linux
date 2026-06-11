@@ -1364,6 +1364,16 @@ void trilin_dp_psr_enable(struct trilin_dp *dp,
 		!conn || conn->vrr.enable)
 		return;
 
+	/*
+	 * Hold off PSR entry for a short window after a full encoder enable:
+	 * drm_self_refresh_helper schedules SR entry ~50ms after the commit,
+	 * but the panel needs longer than that to stabilise after unblank and
+	 * will leave the sink in DP_PSR_SINK_INACTIVE, tripping the timeout
+	 * + recovery branch below. Framework retries on the next idle commit.
+	 */
+	if (!ktime_after(ktime_get(), dp->psr.allow_after))
+		return;
+
 	ret = drm_dp_dpcd_readb(&dp->aux, DP_PSR_STATUS, &psr_status);
 	if (ret != 1) {
 		DP_ERR("Failed to read psr status %d\n", ret);
