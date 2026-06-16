@@ -1774,7 +1774,7 @@
 		compatible = "realtek,rts5453h";
 		interrupt-parent = <&s5_gpio0>;
 		interrupts = <9 IRQ_TYPE_LEVEL_LOW>;
-		id = <2>;
+		id = <0>;
 		reg = <0x30>;
 		status = "okay";
 		usbc_con0 {
@@ -1802,7 +1802,7 @@
 		compatible = "realtek,rts5453h";
 		interrupt-parent = <&s5_gpio0>;
 		interrupts = <9 IRQ_TYPE_LEVEL_LOW>;
-		id = <3>;
+		id = <1>;
 		reg = <0x31>;
 		status = "okay";
 		usbc_con1 {
