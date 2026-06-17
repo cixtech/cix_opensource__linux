@@ -3,6 +3,7 @@
  * Copyright (C) 2022 Linaro Ltd.
  */
 
+#include <linux/acpi.h>
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -157,12 +158,21 @@ static const struct of_device_id gpio_sbu_mux_match[] = {
 };
 MODULE_DEVICE_TABLE(of, gpio_sbu_mux_match);
 
+#ifdef CONFIG_ACPI
+static const struct acpi_device_id gpio_sbu_mux_acpi_match[] = {
+	{ "CIXH200F", 0 },  /* CIX GPIO SBU Mux */
+	{}
+};
+MODULE_DEVICE_TABLE(acpi, gpio_sbu_mux_acpi_match);
+#endif
+
 static struct platform_driver gpio_sbu_mux_driver = {
 	.probe = gpio_sbu_mux_probe,
 	.remove_new = gpio_sbu_mux_remove,
 	.driver = {
 		.name = "gpio_sbu_mux",
 		.of_match_table = gpio_sbu_mux_match,
+		.acpi_match_table = ACPI_PTR(gpio_sbu_mux_acpi_match),
 	},
 };
 module_platform_driver(gpio_sbu_mux_driver);
