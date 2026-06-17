@@ -247,6 +247,24 @@ static int trilin_dp_connector_atomic_check(struct drm_connector *conn,
 	return 0;
 }
 
+static void trilin_dp_oob_hotplug_event(struct drm_connector *connector, enum drm_connector_status hpd_state)
+{
+	struct trilin_dp *dp = connector_to_dp(connector);
+
+	DP_DEBUG("enter\n");
+	if (dp->state & DPTX_STATE_SUSPENDED) {
+		dp->force_hpd = connector_status_disconnected;
+		DP_INFO("hpd_state: %d", hpd_state);
+		return;
+	}
+
+	if(dp->force_hpd == hpd_state)
+		return;
+	dp->force_hpd = hpd_state;
+	DP_INFO("drm_connector_status: %d ", hpd_state);
+	schedule_delayed_work(&dp->hpd_event_work, 0);
+}
+
 int trilin_connector_update_modes(struct drm_connector *connector,
 				  struct edid *edid)
 {
@@ -570,6 +588,7 @@ static const struct drm_connector_funcs trilin_dp_connector_funcs = {
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 	.reset = trilin_dp_connector_reset,
 	.debugfs_init = trilin_dp_connector_debugfs_init,
+	.oob_hotplug_event = trilin_dp_oob_hotplug_event,
 };
 
 static const struct drm_connector_helper_funcs
