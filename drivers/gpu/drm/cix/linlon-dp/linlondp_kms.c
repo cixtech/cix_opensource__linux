@@ -790,6 +790,10 @@ linlondp_kms_attach_cluster(struct device *component_master_dev,
 	err = drm_dev_register(drm, 0);
 	if (err)
 		goto free_interrupts;
+	// attach fwnode
+	for (i = 0; i < n_mdevs; i++)
+		linlondp_cix_fwnode_add(drm, mdevs[i]->dev);
+
 	return kms;
 
 free_interrupts:
@@ -805,9 +809,13 @@ cleanup_mode_config:
 
 void linlondp_kms_detach(struct linlondp_kms_dev *kms)
 {
+	unsigned int i;
 	struct drm_device *drm = &kms->base;
 
 	linlondp_kms_clear_pre_blank_state(drm);
+	// detach fwnode
+	for (i = 0; i < kms->n_hw_mdevs; i++)
+		linlondp_cix_fwnode_del(drm, kms->hw_mdevs[i]->dev);
 	drm_dev_unregister(drm);
 	drm_kms_helper_poll_fini(drm);
 	drm_atomic_helper_shutdown(drm);

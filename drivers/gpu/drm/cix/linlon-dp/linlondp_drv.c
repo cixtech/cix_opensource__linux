@@ -8,6 +8,7 @@
 #include <linux/kernel.h>
 #include <linux/acpi.h>
 #include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/component.h>
 #include <linux/pm_runtime.h>
 #include <linux/aperture.h>
@@ -286,6 +287,245 @@ static int linlondp_dpu_slave_remove(struct platform_device *pdev)
 	if (mdev)
 		linlondp_dev_destroy(mdev);
 	platform_set_drvdata(pdev, NULL);
+	return 0;
+}
+
+
+/*
+ * Check whether a fwnode's device is a DP TX controller.
+ * Used to skip DSI / other endpoints when walking DPU pipeline outputs.
+ */
+static bool linlondp_cix_is_dptx_device(struct fwnode_handle *fwnode)
+{
+	if (is_of_node(fwnode))
+		return of_device_is_compatible(to_of_node(fwnode), "cix,sky1-dptx");
+	if (is_acpi_node(fwnode)) {
+		struct acpi_device *adev = to_acpi_device_node(fwnode);
+
+		return adev && !strcmp(acpi_device_hid(adev), "CIXH502F");
+	}
+	return false;
+}
+
+/*
+ * Find the next DP/eDP connector whose fwnode is not yet set.
+ * Must be called with mode_config.mutex held.
+ */
+static struct drm_connector *
+linlondp_cix_next_unset_dp_connector(struct drm_device *drm)
+{
+	struct drm_connector *connector;
+
+	list_for_each_entry(connector, &drm->mode_config.connector_list, head) {
+		if (connector->connector_type != DRM_MODE_CONNECTOR_DisplayPort &&
+		    connector->connector_type != DRM_MODE_CONNECTOR_eDP)
+			continue;
+		if (!connector->fwnode)
+			return connector;
+	}
+	return NULL;
+}
+
+static struct drm_connector *
+linlondp_cix_connector_find_by_fwnode(struct drm_device *drm,
+				      struct fwnode_handle *fwnode)
+{
+	struct drm_connector *connector, *found = ERR_PTR(-ENODEV);
+
+	if (!fwnode)
+		return ERR_PTR(-ENODEV);
+
+	mutex_lock(&drm->mode_config.mutex);
+	list_for_each_entry(connector, &drm->mode_config.connector_list, head) {
+		if (connector->fwnode == fwnode ||
+		    (connector->fwnode && connector->fwnode->secondary == fwnode)) {
+			drm_connector_get(connector);
+			found = connector;
+			break;
+		}
+	}
+	mutex_unlock(&drm->mode_config.mutex);
+
+	return found;
+}
+
+static int linlondp_cix_connector_fwnode_add(struct drm_connector *connector, struct device *dev)
+{
+	struct fwnode_handle *fwnode;
+
+	if(connector->fwnode)
+		return 0;
+
+	/* Set dp fwnode as the connector's fwnode for oob hotplug enent. */
+	fwnode = dev_fwnode(dev);
+	if (!fwnode) {
+		pr_warn("dp->dev->fwnode is NULL\n");
+		return -ENODEV;
+	}
+	connector->fwnode = fwnode_handle_get(fwnode);
+	fwnode_handle_put(fwnode);
+	return 0;
+}
+
+static void linlondp_cix_connector_fwnode_del(struct drm_connector *connector, struct device *dev)
+{
+	if(connector->fwnode) {
+		fwnode_handle_put(connector->fwnode);
+		connector->fwnode = NULL;
+	}
+
+	if(!connector->kdev)
+		return;
+
+	if(dev_fwnode(connector->kdev)) {
+		device_set_node(connector->kdev, NULL);
+	}
+}
+
+int linlondp_cix_fwnode_add(struct drm_device *drm, struct device *dev)
+{
+	const char *tmp_name = NULL;
+
+	mutex_lock(&drm->mode_config.mutex);
+
+	if (has_acpi_companion(dev)) {
+		struct fwnode_handle *remote;
+		struct fwnode_handle *acpi_child;
+		fwnode_for_each_child_node(dev->fwnode, acpi_child) {
+			struct drm_connector *connector;
+
+			tmp_name = acpi_child->ops->get_name(acpi_child);
+			if (strncmp(tmp_name, "pipeline@0", 10))
+				continue;
+
+			remote = fwnode_graph_get_remote_node(acpi_child,
+					LINLONDP_OF_PORT_OUTPUT, 0);
+			if (!remote)
+				continue;
+
+			if (!linlondp_cix_is_dptx_device(remote)) {
+				fwnode_handle_put(remote);
+				continue;
+			}
+
+			connector = linlondp_cix_next_unset_dp_connector(drm);
+			if (connector)
+				linlondp_cix_connector_fwnode_add(connector,
+								 remote->dev);
+			fwnode_handle_put(remote);
+		}
+	} else {
+		struct device_node *remote;
+		struct device_node *of_child;
+		struct platform_device *pdev;
+		for_each_available_child_of_node(dev->of_node, of_child) {
+			struct drm_connector *connector;
+
+			if (of_node_cmp(of_child->name, "pipeline") != 0)
+				continue;
+
+			remote = of_graph_get_remote_node(of_child,
+					LINLONDP_OF_PORT_OUTPUT, 0);
+			if (!remote)
+				continue;
+
+			if (!linlondp_cix_is_dptx_device(of_fwnode_handle(remote))) {
+				of_node_put(remote);
+				continue;
+			}
+
+			connector = linlondp_cix_next_unset_dp_connector(drm);
+			if (!connector) {
+				of_node_put(remote);
+				continue;
+			}
+
+			pdev = of_find_device_by_node(remote);
+			if (pdev) {
+				linlondp_cix_connector_fwnode_add(connector,
+								 &pdev->dev);
+				put_device(&pdev->dev);
+			}
+			of_node_put(remote);
+		}
+	}
+
+	mutex_unlock(&drm->mode_config.mutex);
+	return 0;
+}
+
+int linlondp_cix_fwnode_del(struct drm_device *drm, struct device *dev)
+{
+	const char *tmp_name = NULL;
+
+	if (has_acpi_companion(dev)) {
+		struct fwnode_handle *remote;
+		struct fwnode_handle *acpi_child;
+		fwnode_for_each_child_node(dev->fwnode, acpi_child) {
+			struct drm_connector *connector;
+
+			tmp_name = acpi_child->ops->get_name(acpi_child);
+			if (strncmp(tmp_name, "pipeline@0", 10))
+				continue;
+
+			remote = fwnode_graph_get_remote_node(acpi_child,
+					LINLONDP_OF_PORT_OUTPUT, 0);
+			if (!remote)
+				continue;
+
+			if (!linlondp_cix_is_dptx_device(remote)) {
+				fwnode_handle_put(remote);
+				continue;
+			}
+
+			connector = linlondp_cix_connector_find_by_fwnode(drm,
+						dev_fwnode(remote->dev));
+			if (!IS_ERR(connector)) {
+				linlondp_cix_connector_fwnode_del(connector,
+								  remote->dev);
+				drm_connector_put(connector);
+			}
+			fwnode_handle_put(remote);
+		}
+	} else {
+		struct device_node *remote;
+		struct device_node *of_child;
+		struct platform_device *pdev;
+		for_each_available_child_of_node(dev->of_node, of_child) {
+			struct drm_connector *connector;
+			struct fwnode_handle *fwnode;
+
+			if (of_node_cmp(of_child->name, "pipeline") != 0)
+				continue;
+
+			remote = of_graph_get_remote_node(of_child,
+					LINLONDP_OF_PORT_OUTPUT, 0);
+			if (!remote)
+				continue;
+
+			if (!linlondp_cix_is_dptx_device(of_fwnode_handle(remote))) {
+				of_node_put(remote);
+				continue;
+			}
+
+			pdev = of_find_device_by_node(remote);
+			if (!pdev) {
+				of_node_put(remote);
+				continue;
+			}
+
+			fwnode = dev_fwnode(&pdev->dev);
+			connector = fwnode ? linlondp_cix_connector_find_by_fwnode(drm, fwnode)
+					   : ERR_PTR(-ENODEV);
+			if (!IS_ERR(connector)) {
+				linlondp_cix_connector_fwnode_del(connector,
+								  &pdev->dev);
+				drm_connector_put(connector);
+			}
+			put_device(&pdev->dev);
+			of_node_put(remote);
+		}
+	}
 	return 0;
 }
 

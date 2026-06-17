@@ -300,7 +300,8 @@ int linlondp_dpu_add_graph_slaves(struct device *master,
 
 int linlondp_dev_resume(struct linlondp_dev *mdev);
 int linlondp_dev_suspend(struct linlondp_dev *mdev);
-
+int linlondp_cix_fwnode_add(struct drm_device *drm, struct device *dev);
+int linlondp_cix_fwnode_del(struct drm_device *drm, struct device *dev);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
 struct fwnode_handle *
 fwnode_graph_get_remote_node(const struct fwnode_handle *fwnode, u32 port_id,
