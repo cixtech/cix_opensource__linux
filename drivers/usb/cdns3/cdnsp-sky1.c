@@ -190,10 +190,10 @@ int sky1_handshake(void __iomem *ptr, u32 mask, u32 done, u64 timeout_us)
 	u32	result;
 	int	ret;
 
-	ret = readl_poll_timeout_atomic(ptr, result,
-					(result & mask) == done ||
-					result == U32_MAX,
-					1, timeout_us);
+	ret = readl_poll_timeout(ptr, result,
+				(result & mask) == done ||
+				result == U32_MAX,
+				10, timeout_us);
 	if (result == U32_MAX)		/* card removed */
 		return -ENODEV;
 
@@ -212,7 +212,7 @@ static int cdns_sky1_platform_suspend(struct device *dev,
 	struct cdnsp_sky1 *data = dev_get_drvdata(parent);
 	u32 value;
 	int ret = 0;
-	int count = 5;
+	int count = 1;
 
 	if (cdns->role != USB_ROLE_HOST)
 		return 0;
@@ -223,10 +223,13 @@ static int cdns_sky1_platform_suspend(struct device *dev,
 		return 0;
 	}
 	xhci = hcd_to_xhci(hcd);
-	dev_info(dev, "[%s:%d] xhci_dev name:%s, hcd->regs:%llx\n", __func__, __LINE__,
-		dev_name(&xhci_dev->dev), (long long unsigned int)hcd->regs);
 
 	if (suspend) {
+		/* Disable IRQ during D3 entry polling to prevent IRQ storm */
+		if (hcd->irq > 0)
+			disable_irq(hcd->irq);
+			synchronize_irq(hcd->irq);
+
 		/* SW request low power when all usb ports allow to it ??? */
 		while (count--) {
 			value = readl(hcd->regs + XECP_PM_PMCSR);
@@ -243,6 +246,9 @@ static int cdns_sky1_platform_suspend(struct device *dev,
 				break;
 			}
 		}
+		/* Re-enable IRQ after D3 entry polling completes */
+		if (hcd->irq > 0)
+			enable_irq(hcd->irq);
 	} else {
 		while (count--) {
 			value = readl(hcd->regs + XECP_PM_PMCSR);
