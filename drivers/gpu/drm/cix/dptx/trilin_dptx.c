@@ -3355,7 +3355,7 @@ int trilin_dp_probe(struct trilin_dpsub *dpsub, struct drm_device *drm)
 	struct resource *res_dp, *res_phy, *res_rcsu = NULL;
 	struct device *dev;
 	struct fwnode_handle *fwnode_edp_panel;
-	struct drm_panel *edp_panel;
+	struct drm_panel *edp_panel = NULL;
 	int ret;
 	const char *str_prop;
 	u32 is_insmod = 0;
@@ -3366,8 +3366,14 @@ int trilin_dp_probe(struct trilin_dpsub *dpsub, struct drm_device *drm)
 	if (!IS_ERR_OR_NULL(fwnode_edp_panel)) {
 		edp_panel = fwnode_drm_find_panel(fwnode_edp_panel);
 		if (IS_ERR(edp_panel)) {
-			dev_err(dev, "%s, invalid drm_panel\n", __func__);
-			return PTR_ERR(edp_panel);
+			ret = PTR_ERR(edp_panel);
+			if (ret == -EPROBE_DEFER)
+				dev_dbg(dev, "%s, edp-panel not ready, defer probe\n",
+					__func__);
+			else
+				dev_err(dev, "%s, invalid drm_panel: %d\n",
+					__func__, ret);
+			return ret;
 		} else
 			dev_info(dev, "%s, edp-panel %s is found\n", __func__,
 				 dev_name(edp_panel->dev));

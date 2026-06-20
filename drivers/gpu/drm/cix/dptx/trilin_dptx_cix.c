@@ -174,8 +174,10 @@ static int trilin_dptx_cix_bind(struct device *comp, struct device *master,
 	/*
 	 * consumer=cluster (master), supplier=dptx (comp): resume supplier first
 	 * (host_init) then cluster discard/hotplug; suspend consumer before supplier.
+	 * Use DL_FLAG_STATELESS so the link can be manually deleted on unbind
+	 * (device_link_del() only works on stateless links).
 	 */
-	dpsub->link = device_link_add(master, comp, 0);
+	dpsub->link = device_link_add(master, comp, DL_FLAG_STATELESS);
 
 	return 0;
 }

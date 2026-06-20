@@ -81,6 +81,8 @@ static void linlondp_cluster_dpu_links_del(struct linlondp_cluster *cl)
 /*
  * consumer=cluster, supplier=DPU slave: resume DPU (linlondp_dev_resume) before
  * cluster PM; pairs with trilin_dptx device_link(cluster<-dptx) for DP->DPU->cluster.
+ * Use DL_FLAG_STATELESS so the link can be manually deleted on unbind
+ * (device_link_del() only works on stateless links).
  */
 static int linlondp_cluster_dpu_links_add(struct device *dev,
 					struct linlondp_cluster *cl)
@@ -88,7 +90,8 @@ static int linlondp_cluster_dpu_links_add(struct device *dev,
 	unsigned int i;
 
 	for (i = 0; i < cl->n_mdevs; i++) {
-		cl->dpu_links[i] = device_link_add(dev, cl->mdevs[i]->dev, 0);
+		cl->dpu_links[i] = device_link_add(dev, cl->mdevs[i]->dev,
+						   DL_FLAG_STATELESS);
 		if (!cl->dpu_links[i]) {
 			linlondp_cluster_dpu_links_del(cl);
 			return -ENOMEM;
