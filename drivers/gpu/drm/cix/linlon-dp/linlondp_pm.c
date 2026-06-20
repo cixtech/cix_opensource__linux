@@ -253,14 +253,22 @@ int linlondp_pm_suspend_capture(struct device *dev, struct drm_device *drm,
 
 	if (linlondp_pm_suspend_state_has_active_crtc(drm)) {
 		linlondp_kms_clear_pre_blank_state(drm);
-	} else if (linlondp_kms_fixup_inactive_suspend_state(drm)) {
+	} else if (pm->suspend_fp_count > 0 &&
+		   linlondp_kms_fixup_inactive_suspend_state(drm)) {
 		dev_info(dev,
 			 "%s: suspend_state inactive, using pre-blank snapshot for helper_resume\n",
 			 __func__);
 	} else {
-		dev_info(dev,
-			 "%s: suspend_state has no active CRTC and no pre-blank snapshot\n",
-			 __func__);
+		linlondp_kms_clear_pre_blank_state(drm);
+		if (!pm->suspend_fp_count) {
+			dev_info(dev,
+				 "%s: no connected displays, drop stale pre-blank snapshot\n",
+				 __func__);
+		} else {
+			dev_info(dev,
+				 "%s: suspend_state has no active CRTC and no pre-blank snapshot\n",
+				 __func__);
+		}
 	}
 
 	return 0;
@@ -271,7 +279,10 @@ int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
 {
 	bool fp_match;
 	bool can_restore;
+	unsigned int suspend_count;
 	int ret;
+
+	suspend_count = pm->suspend_fp_count;
 
 	if (pm->capture_failed) {
 		dev_info(dev, "%s: capture failed at suspend, force discard\n",
@@ -285,7 +296,8 @@ int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
 	linlondp_pm_free_conn_fp(pm);
 	pm->capture_failed = false;
 
-	can_restore = fp_match && drm->mode_config.suspend_state &&
+	can_restore = fp_match && suspend_count > 0 &&
+		      drm->mode_config.suspend_state &&
 		      !IS_ERR(drm->mode_config.suspend_state) &&
 		      linlondp_pm_suspend_state_has_active_crtc(drm);
 
