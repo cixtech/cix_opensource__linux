@@ -137,6 +137,9 @@ bool linlondp_pm_conn_fp_match(struct device *dev,
 	u16 mfg, product;
 	u32 serial;
 
+	if (!suspend_count) {
+		goto mismatch;
+	}
 	for (i = 0; i < suspend_count; i++) {
 		bool found = false;
 
@@ -279,10 +282,7 @@ int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
 {
 	bool fp_match;
 	bool can_restore;
-	unsigned int suspend_count;
 	int ret;
-
-	suspend_count = pm->suspend_fp_count;
 
 	if (pm->capture_failed) {
 		dev_info(dev, "%s: capture failed at suspend, force discard\n",
@@ -296,8 +296,7 @@ int linlondp_pm_resume_check(struct device *dev, struct drm_device *drm,
 	linlondp_pm_free_conn_fp(pm);
 	pm->capture_failed = false;
 
-	can_restore = fp_match && suspend_count > 0 &&
-		      drm->mode_config.suspend_state &&
+	can_restore = fp_match && drm->mode_config.suspend_state &&
 		      !IS_ERR(drm->mode_config.suspend_state) &&
 		      linlondp_pm_suspend_state_has_active_crtc(drm);
 
