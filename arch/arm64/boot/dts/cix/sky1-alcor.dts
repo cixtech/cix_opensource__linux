@@ -74,14 +74,8 @@
 	};
 
 	dummy_codec: dummy_codec {
-		#sound-dai-cells = <0>;
+		#sound-dai-cells = <1>;
 		compatible = "linux,dummy";
-		status = "disabled";
-	};
-
-	alc256_codec: alc256_codec {
-		compatible = "realtek,alc256";
-		#sound-dai-cells = <0>;
 		status = "okay";
 	};
 
@@ -91,19 +85,32 @@
 		status = "okay";
 
 		/* for pa alc1019 */
+		pdb0-gpios = <&fch_gpio3 5 GPIO_ACTIVE_HIGH>;
 		pdb1-gpios = <&fch_gpio3 6 GPIO_ACTIVE_HIGH>;
 		pdb2-gpios = <&fch_gpio3 7 GPIO_ACTIVE_HIGH>;
 		pdb3-gpios = <&fch_gpio3 8 GPIO_ACTIVE_HIGH>;
 
-		hda: hda {
+		cru-ctrl = <&audss_cru>;
+
+		codec_alc5682: codec_alc5682 {
 			status = "disabled";
 
+			clocks = <&audss_clk CLK_MCLK0>,
+				 <&scmi_clk CLK_TREE_AUDIO_CLK0>,
+				 <&scmi_clk CLK_TREE_AUDIO_CLK2>;
+			clock-names = "mclk", "audio_clk0", "audio_clk2";
+			mclk-idx = /bits/ 8 <0>;
+
+			format = "i2s";
+			mclk-fs = <512>;
+			jack-det,hp;
+
 			cpu {
-				sound-dai = <&ipb_hda>;
+				sound-dai = <&i2s0>;
 			};
 
 			codec {
-				sound-dai = <&alc256_codec>;
+				sound-dai = <&alc5682 0>;
 			};
 		};
 
@@ -134,7 +141,6 @@
 			status = "disabled";
 
 			format = "i2s";
-			mclk-fs = <256>;
 
 			frame-master = <&dummy_codec_mst>;
 			bitclock-master = <&dummy_codec_mst>;
@@ -144,7 +150,7 @@
 			};
 
 			dummy_codec_mst: codec {
-				sound-dai = <&dummy_codec>;
+				sound-dai = <&dummy_codec 0>;
 			};
 
 		};
@@ -163,7 +169,7 @@
 			};
 
 			lt7911uxc_codec: codec {
-				sound-dai = <&lt7911uxc>;
+			//	sound-dai = <&lt7911uxc>;
 			};
 		};
 
@@ -1082,11 +1088,12 @@
 };
 
 &ipb_hda {
+	cix,model = "CIX SKY1 EVB HDA";
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_hda>;
 	pdb-gpios = <&fch_gpio3 5 GPIO_ACTIVE_HIGH>;
-	memory-region = <&audio_alsa>;
-	status = "disabled";
+	memory-region = <&audio_alsa_hda>;
+	status = "okay";
 };
 
 &sensorhub {
@@ -1831,6 +1838,25 @@
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_fch_i2c2>;
+
+	alc5682: codec@1a {
+		compatible = "realtek,rt5682s";
+		reg = <0x1a>;
+
+		interrupt-parent = <&fch_gpio3>;
+		interrupts = <10 IRQ_TYPE_EDGE_BOTH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_alc5682_irq>;
+
+		realtek,dmic1-data-pin = <1>; /* using GPIO2 pin as dmic1 data pin */
+		realtek,dmic1-clk-pin = <2>; /* using GPIO3 pin as dmic1 clock pin */
+		realtek,dmic-clk-rate-hz = <2048000>;
+
+		realtek,jd-src = <1>; /* using JD1 as JD source */
+
+		#sound-dai-cells = <1>;
+		status = "disabled";
+	};
 };
 
 &i2c2_slave {
