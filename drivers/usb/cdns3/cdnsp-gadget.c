@@ -521,6 +521,27 @@ static void cdnsp_invalidate_ep_events(struct cdnsp_device *pdev,
 	}
 }
 
+static const char *cdnsp_cmd_type_to_str(u32 type)
+{
+	switch (type) {
+	case TRB_ENABLE_SLOT:	return "ENABLE_SLOT";
+	case TRB_DISABLE_SLOT:	return "DISABLE_SLOT";
+	case TRB_ADDR_DEV:	return "ADDR_DEV";
+	case TRB_CONFIG_EP:	return "CONFIG_EP";
+	case TRB_EVAL_CONTEXT:	return "EVAL_CONTEXT";
+	case TRB_RESET_EP:	return "RESET_EP";
+	case TRB_STOP_RING:	return "STOP_RING";
+	case TRB_SET_DEQ:	return "SET_DEQ";
+	case TRB_RESET_DEV:	return "RESET_DEV";
+	case TRB_FORCE_EVENT:	return "FORCE_EVENT";
+	case TRB_FORCE_HEADER:	return "FORCE_HEADER";
+	case TRB_CMD_NOOP:	return "NOOP";
+	case TRB_HALT_ENDPOINT:	return "HALT_EP";
+	case TRB_FLUSH_ENDPOINT: return "FLUSH_EP";
+	default:		return "UNKNOWN";
+	}
+}
+
 int cdnsp_wait_for_cmd_compl(struct cdnsp_device *pdev)
 {
 	struct cdnsp_segment *event_deq_seg;
@@ -541,7 +562,10 @@ int cdnsp_wait_for_cmd_compl(struct cdnsp_device *pdev)
 					!CMD_RING_BUSY(val), 1,
 					CDNSP_CMD_TIMEOUT);
 	if (ret) {
-		dev_err(pdev->dev, "ERR: Timeout while waiting for command\n");
+		u32 trb_type = TRB_FIELD_TO_TYPE(le32_to_cpu(cmd_trb->generic.field[3]));
+
+		dev_err(pdev->dev, "ERR: Timeout while waiting for command %s (type %d)\n",
+			cdnsp_cmd_type_to_str(trb_type), trb_type);
 		trace_cdnsp_cmd_timeout(pdev->cmd_ring, &cmd_trb->generic);
 		pdev->cdnsp_state = CDNSP_STATE_DYING;
 		return -ETIMEDOUT;
@@ -805,6 +829,11 @@ int cdnsp_alloc_streams(struct cdnsp_device *pdev, struct cdnsp_ep *pep)
 int cdnsp_disable_slot(struct cdnsp_device *pdev)
 {
 	int ret;
+
+	if (!pdev->slot_id) {
+		dev_dbg(pdev->dev, "Slot already disabled, skip\n");
+		return 0;
+	}
 
 	cdnsp_queue_slot_control(pdev, TRB_DISABLE_SLOT);
 	cdnsp_ring_cmd_db(pdev);
