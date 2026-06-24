@@ -78,10 +78,6 @@
 
 #define PERST_DELAY_US 1000
 
-/* Power cycle timing */
-/* Delay after power off for capacitor discharge */
-#define POWER_CYCLE_OFF_DELAY_US 3000
-
 /* local interrupt (aer error) */
 #define LOCAL_ERR_PFOVFL BIT(8)
 #define LOCAL_ERR_NPFOVFL BIT(9)
@@ -1341,6 +1337,9 @@ static void sky1_pcie_parse_ep_pwr_supply(struct sky1_pcie *pcie)
 	if (device_property_read_u32(dev, "sky1,re-pwron-ms",
 				     &pcie->re_pwron_delay_ms))
 		pcie->re_pwron_delay_ms = 0;
+	if (device_property_read_u32(dev, "sky1,re-pwroff-ms",
+				     &pcie->re_pwroff_delay_ms))
+		pcie->re_pwroff_delay_ms = 10;
 
 	/* optional power control for device */
 	pcie->vsupply = devm_regulator_get_optional(dev, "vcc-pcie");
@@ -1450,15 +1449,16 @@ static int sky1_pcie_safe_power_cycle(struct sky1_pcie *pcie)
 		return ret;
 
 	/* Wait for capacitor discharge after power off */
-	usleep_range(POWER_CYCLE_OFF_DELAY_US, POWER_CYCLE_OFF_DELAY_US + 100);
+	msleep(pcie->re_pwroff_delay_ms);
 
 	ret = sky1_pcie_en_ep_power(pcie, true);
 	if (ret < 0)
 		return ret;
 	/* Wait for endpoint initialization after power on. */
 	msleep(pcie->re_pwron_delay_ms);
-	dev_info(pcie->dev, "power cycle completed, delay %d ms\n",
-		 pcie->re_pwron_delay_ms);
+	dev_info(pcie->dev,
+		 "power cycle completed, pwroff = %d ms, pwron = %d ms\n",
+		 pcie->re_pwroff_delay_ms, pcie->re_pwron_delay_ms);
 	return 0;
 }
 
