@@ -2249,6 +2249,7 @@ pinctrl_gmac1: pinctrl_gmac1 {
 	wake-gpios = <&s5_gpio0 19 GPIO_ACTIVE_HIGH>;
 	vcc-pcie-supply = <&eth_3v3_pcie>;
 	sky1,re-pwron-ms = <120>; /* 120ms power cycle delay per NIC spec */
+	sky1,re-pwroff-ms = <350>; /* capacitor discharge delay after power off */
 	sky1,str-pwron;
 	status = "okay";
 };
