@@ -546,12 +546,14 @@
 	pinctrl_pcie_x1_1_rc: pinctrl_pcie_x1_1_rc {/*x1_1*/
 		sky1,pins = <
 			CIX_PAD_GPIO006_FUNC_GPIO006 (PULL_DOWN|DS_LEVEL4)
+			CIX_PAD_GPIO012_FUNC_GPIO012 (PULL_DOWN|DS_LEVEL4)
 		>;
 	};
 
 	pinctrl_pcie_x1_0_rc: pinctrl_pcie_x1_0_rc {/*x1_0*/
 		sky1,pins = <
 			CIX_PAD_GPIO005_FUNC_GPIO005 (PULL_DOWN|DS_LEVEL4)
+			CIX_PAD_GPIO013_FUNC_GPIO013 (PULL_DOWN|DS_LEVEL4)
 		>;
 	};
 
@@ -2186,6 +2188,9 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_pcie_x1_1_rc>;
 	reset-gpios = <&s5_gpio0 5 GPIO_ACTIVE_HIGH>;
+	wake-gpios = <&s5_gpio0 11 GPIO_ACTIVE_HIGH>;
+	sky1,re-pwron-ms = <120>; /* 120ms power cycle delay per NIC spec */
+	sky1,str-pwron;
 	status = "okay";
 };
 
@@ -2194,9 +2199,11 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_pcie_x1_0_rc>;
 	reset-gpios = <&s5_gpio0 4 GPIO_ACTIVE_HIGH>;
+	wake-gpios = <&s5_gpio0 12 GPIO_ACTIVE_HIGH>;
+	sky1,re-pwron-ms = <120>; /* 120ms power cycle delay per NIC spec */
+	sky1,str-pwron;
 	status = "okay";
 };
-
 &pcie1_phy {
 	status = "okay";
 };
