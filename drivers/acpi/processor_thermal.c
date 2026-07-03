@@ -481,22 +481,32 @@ static int processor_state2power(struct thermal_cooling_device *cdev,
 		goto EXIT;
 	}
 
-	/* Request state should be less than max_level */
-	if (state > cpu_data->opp_level_num) {
-		pr_err("Invalid state %lu for cooling device %s\n",
-		       state, cdev->type);
-		ret = -EINVAL;
-		goto EXIT;
-	}
-
 	em = em_cpu_get(policy->cpu);
 	if (!em) {
 		pr_warn("No energy model for CPU%d\n", policy->cpu);
 		ret = -ENODEV;
 		goto EXIT;
 	}
-	num_cpus = cpumask_weight(policy->cpus);
+
+	if (cpu_data->opp_level_num == 0 ||
+	    state >= cpu_data->opp_level_num ||
+	    state >= (unsigned long)em->nr_perf_states) {
+		pr_debug("Invalid state %lu for cooling device %s (opp_level_num %u, em states %d)\n",
+			 state, cdev->type, cpu_data->opp_level_num,
+			 em->nr_perf_states);
+		ret = -EINVAL;
+		goto EXIT;
+	}
+
 	idx = cpu_data->opp_level_num - state - 1;
+	if (idx >= (unsigned int)em->nr_perf_states) {
+		pr_warn("EM index %u out of range (%d) for CPU%d\n",
+			idx, em->nr_perf_states, policy->cpu);
+		ret = -EINVAL;
+		goto EXIT;
+	}
+
+	num_cpus = cpumask_weight(policy->cpus);
 	freq = em->table[idx].frequency;
 	opp_power = em->table[idx].power;
 	*power = opp_power * num_cpus;
