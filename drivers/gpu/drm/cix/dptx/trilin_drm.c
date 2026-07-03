@@ -959,33 +959,30 @@ static bool compute_available_clock_rate(struct trilin_dp *dp,
 		struct drm_connector_state *connector_state, u8 suggest_bpc,
 		int clock, int color_format, int *rt_bpc, int *rt_bpp)
 {
-	int min_bpc = (color_format == DRM_COLOR_FORMAT_RGB444) ? 6 : 8;
-	int bpc = max(suggest_bpc, min_bpc);
-	int bpp, max_pixel_clock;
+	int bpc, bpp, max_pixel_clock;
 	u8 max_lanes = dp->link_config.max_lanes;
 	int rate, max_rate = dp->link_config.max_rate;
 	struct drm_display_info *info = &connector_state->connector->display_info;
 
-	for (; bpc >= min_bpc; bpc = bpc - 2) {
-		bpc = trilin_dp_cal_bpc(dp, connector_state, bpc);
-		bpp = trilin_dp_cal_bpp(bpc, color_format);
+	bpc = trilin_dp_cal_bpc(dp, connector_state, suggest_bpc);
+	bpp = trilin_dp_cal_bpp(bpc, color_format);
 
-		/* rate = max pixel clock (kHz) from DP link bandwidth */
-		rate = trilin_dp_max_rate(max_rate, max_lanes, bpp);
+	/* rate = max pixel clock (kHz) from DP link bandwidth */
+	rate = trilin_dp_max_rate(max_rate, max_lanes, bpp);
 
-		max_pixel_clock = rate;
-		if (info->max_tmds_clock > 0)
-			max_pixel_clock = min(max_pixel_clock,
-					      trilin_dp_hdmi_max_pixel_clock_khz(
-						      info->max_tmds_clock, bpp));
+	max_pixel_clock = rate;
+	if (info->max_tmds_clock > 0)
+		max_pixel_clock = min(max_pixel_clock,
+				      trilin_dp_hdmi_max_pixel_clock_khz(
+					      info->max_tmds_clock, bpp));
 
-		/* clock is adjusted_mode->clock, also in kHz */
-		if (clock <= max_pixel_clock) {
-			*rt_bpc = bpc;
-			*rt_bpp = bpp;
-			return true;
-		}
+	/* clock is adjusted_mode->clock, also in kHz */
+	if (clock <= max_pixel_clock) {
+		*rt_bpc = bpc;
+		*rt_bpp = bpp;
+		return true;
 	}
+
 	return false;
 }
 
@@ -1010,34 +1007,39 @@ int trilin_dp_encoder_compute_config(struct drm_encoder *encoder,
 	u8 link_rate_bw_code, i;
 	u8 max_lanes = dp->link_config.max_lanes;
 	int link_rate = max_rate;
+	suggest_bpc = max(suggest_bpc, 6);
 
 	if (!(info_formats & DRM_COLOR_FORMAT_RGB444)) {
 		info_formats |= DRM_COLOR_FORMAT_RGB444;
 		DP_WARN("info_format=%0x, force support RGB444", info->color_formats);
 	}
 
-	const int COMMON_COLORS_FORMATS[] = {
-		DRM_COLOR_FORMAT_RGB444, DRM_COLOR_FORMAT_YCBCR422, DRM_COLOR_FORMAT_YCBCR420};
+	const struct {
+		int format;
+		int bpc;
+	} fmt_prio[] = {
+		{DRM_COLOR_FORMAT_RGB444, 0},
+		{DRM_COLOR_FORMAT_YCBCR422, 10},
+		{DRM_COLOR_FORMAT_YCBCR422, 8},
+		{DRM_COLOR_FORMAT_RGB444, 6},
+		{DRM_COLOR_FORMAT_YCBCR420, 8},
+	};
 
-	if (drm_mode_is_420_only(info, adjusted_mode)) {
-		/* CEA YUV420-only timings must be driven as YCbCr 4:2:0 */
-		color_format = DRM_COLOR_FORMAT_YCBCR420;
-		success = compute_available_clock_rate(dp, connector_state, suggest_bpc,
-			adjusted_mode->clock, color_format, &bpc, &bpp);
-		if (success)
-			DP_INFO("YUV420-only mode: use YUV420 format");
-	} else {
-		for (i = 0; i < ARRAY_SIZE(COMMON_COLORS_FORMATS); i++) {
-			color_format = COMMON_COLORS_FORMATS[i];
-			if (info_formats & color_format) {
-				success = compute_available_clock_rate(dp, connector_state,
-					suggest_bpc, adjusted_mode->clock, color_format,
-					&bpc, &bpp);
-				if (success) {
-					if (color_format != DRM_COLOR_FORMAT_RGB444)
-						DP_INFO("Use YUV Format=0x%0x", color_format);
-					break;
-				}
+	for (i = 0; i < ARRAY_SIZE(fmt_prio); i++) {
+		color_format = fmt_prio[i].format;
+		if ((info_formats & color_format) ||
+		    drm_mode_is_420_only(info, adjusted_mode)) {
+			int curr_bpc = fmt_prio[i].bpc ? fmt_prio[i].bpc : suggest_bpc;
+
+			success = compute_available_clock_rate(dp, connector_state,
+							       curr_bpc,
+							       adjusted_mode->clock,
+							       color_format, &bpc,
+							       &bpp);
+			if (success) {
+				if (color_format != DRM_COLOR_FORMAT_RGB444)
+					DP_INFO("Use YUV Format=0x%x", color_format);
+				break;
 			}
 		}
 	}
