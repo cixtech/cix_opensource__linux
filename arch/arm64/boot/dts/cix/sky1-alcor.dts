@@ -1640,6 +1640,7 @@
 &usbss_4 {
 	status = "okay";
 	dr_mode = "host";
+	cdnsp-vbus-override;
 };
 
 &usb3_phy4_1 {
@@ -1657,6 +1658,7 @@
 &usbss_5 {
 	status = "okay";
 	dr_mode = "host";
+	cdnsp-vbus-override;
 };
 
 &sky1_usbhs_0 {
