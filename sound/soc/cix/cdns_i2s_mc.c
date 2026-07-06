@@ -568,11 +568,11 @@ static int cdns_i2s_mc_prepare(struct snd_pcm_substream *substream,
 	}
 
 	/*
-	 * Enable global interrupt mask, for both transmitter and recevider, use
-	 * individual interrupt masks
+	 * Disable global interrupt mask, for both transmitter and recevider, since
+	 * it cannot be cleared.
 	 */
 	regmap_update_bits(i2s_mc_priv->regmap, I2S_CID_CTRL,
-			   I2S_CID_CTRL_INTREQ_MASK, I2S_CID_CTRL_INTREQ_MASK);
+			   I2S_CID_CTRL_INTREQ_MASK, 0);
 
 	return 0;
 }
