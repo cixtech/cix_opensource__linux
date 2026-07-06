@@ -839,6 +839,14 @@ static void usbdp_set_dpphy_mode(struct cix_udphy *udphy)
 	}
 }
 
+static void usbdp_set_dpphy_status(struct cix_udphy *udphy, enum phy_status status)
+{
+	if (NULL != udphy->dp_phy) {
+		udphy->dp_phy->attrs.status = status;
+		dev_info(udphy->dev, "set dp phy status: %d\n", udphy->dp_phy->attrs.status);
+	}
+}
+
 static int usbdp_typec_mux_set(struct typec_mux_dev *mux,
 			       struct typec_mux_state *state)
 {
@@ -869,6 +877,10 @@ static int usbdp_typec_mux_set(struct typec_mux_dev *mux,
 	}
 
 	usbdp_set_dpphy_mode(udphy);
+
+	if (state->data) {
+		usbdp_set_dpphy_status(udphy, ((struct typec_displayport_data *)(state->data))->status);
+	}
 
 	//TODO check whether the HPD state need software
 	mutex_unlock(&udphy->mutex);

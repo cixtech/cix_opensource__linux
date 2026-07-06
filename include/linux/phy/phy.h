@@ -19,6 +19,7 @@
 #include <linux/phy/phy-dp.h>
 #include <linux/phy/phy-lvds.h>
 #include <linux/phy/phy-mipi-dphy.h>
+#include <linux/usb/typec_dp.h>
 
 struct phy;
 
@@ -43,6 +44,11 @@ enum phy_mode {
 	PHY_MODE_SATA,
 	PHY_MODE_LVDS,
 	PHY_MODE_DP
+};
+
+enum phy_status {
+	PHY_STATUS_INVALID,
+	PHY_STATUS_HPD_HIGH = DP_STATUS_HPD_STATE,
 };
 
 enum phy_media {
@@ -136,6 +142,7 @@ struct phy_attrs {
 	u32			bus_width;
 	u32			max_link_rate;
 	enum phy_mode		mode;
+	enum phy_status		status;
 };
 
 /**
@@ -240,6 +247,10 @@ int phy_validate(struct phy *phy, enum phy_mode mode, int submode,
 static inline enum phy_mode phy_get_mode(struct phy *phy)
 {
 	return phy->attrs.mode;
+}
+static inline enum phy_status phy_get_status(struct phy *phy)
+{
+	return phy->attrs.status;
 }
 int phy_reset(struct phy *phy);
 int phy_calibrate(struct phy *phy);
@@ -380,6 +391,11 @@ static inline int phy_set_speed(struct phy *phy, int speed)
 static inline enum phy_mode phy_get_mode(struct phy *phy)
 {
 	return PHY_MODE_INVALID;
+}
+
+static inline enum phy_mode phy_get_status(struct phy *phy)
+{
+	return PHY_STATUS_INVALID;
 }
 
 static inline int phy_reset(struct phy *phy)

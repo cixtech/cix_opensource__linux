@@ -2769,6 +2769,46 @@ int trilin_dp_deinit_config(struct trilin_dp *dp)
 	return rc;
 }
 
+static bool trilin_dp_typec_dp_configured(struct trilin_dp *dp)
+{
+	struct trilin_phy_t *phy = &dp->phy;
+
+	if (IS_ERR_OR_NULL(phy->base))
+		return false;
+
+	return phy_get_mode(phy->base) == PHY_MODE_DP;
+}
+
+static bool trilin_dp_typec_dp_hpd_status(struct trilin_dp *dp)
+{
+	struct trilin_phy_t *phy = &dp->phy;
+
+	if (IS_ERR_OR_NULL(phy->base))
+		return false;
+
+	return !!(phy_get_status(phy->base) & PHY_STATUS_HPD_HIGH);
+}
+
+/*
+ * Type-C may configure DP mux and raise HPD before this driver finishes probe;
+ * the oob hotplug event is then lost. Replay once probe is ready.
+ */
+static void trilin_dp_replay_deferred_hotplug(struct trilin_dp *dp)
+{
+	bool dp_configured = trilin_dp_typec_dp_configured(dp);
+	bool dp_hpd = trilin_dp_typec_dp_hpd_status(dp);
+
+	if (!dp->edp_panel && (dp->force_hpd == connector_status_unknown)
+			&& dp_configured && dp_hpd) {
+		dp->force_hpd = connector_status_connected;
+
+		DP_INFO("replay deferred hotplug force_hpd=%d typec_dp=%d\n",
+			dp->force_hpd, dp_configured);
+		dp->status = connector_status_unknown;
+		schedule_delayed_work(&dp->hpd_event_work, 0);
+	}
+}
+
 #define DP_HPD_MAX_TRIES 100
 
 /*hdp event handle plug in and out*/
@@ -3261,6 +3301,9 @@ int trilin_dp_init_config(struct trilin_dp *dp)
 		goto end2;
 
 	DP_INFO("init hpd high is %d\n", trilin_dp_get_hpd_state(dp));
+	/* when no detect, check again for SW hotplug trigger */
+	if (trilin_dp_get_hpd_state(dp) == 0)
+		trilin_dp_replay_deferred_hotplug(dp);
 	return rc;
 end2:
 	trilin_dp_aux_cleanup(dp);
