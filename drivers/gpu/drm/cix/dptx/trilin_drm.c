@@ -1014,22 +1014,68 @@ int trilin_dp_encoder_compute_config(struct drm_encoder *encoder,
 		DP_WARN("info_format=%0x, force support RGB444", info->color_formats);
 	}
 
-	const struct {
+	struct fmt_prio_entry {
 		int format;
 		int bpc;
-	} fmt_prio[] = {
-		{DRM_COLOR_FORMAT_RGB444, 0},
-		{DRM_COLOR_FORMAT_YCBCR422, 10},
-		{DRM_COLOR_FORMAT_YCBCR422, 8},
-		{DRM_COLOR_FORMAT_RGB444, 6},
-		{DRM_COLOR_FORMAT_YCBCR420, 8},
 	};
 
-	for (i = 0; i < ARRAY_SIZE(fmt_prio); i++) {
+	/* SST: original order - DON'T CHANGE! RGB -> YUV422 10 -> YUV422 8 -> RGB 6 -> YUV420 8 */
+	const struct fmt_prio_entry fmt_prio_sst[] = {
+		{DRM_COLOR_FORMAT_RGB444, 0},   /* use suggest_bpc (8 or 10) */
+		{DRM_COLOR_FORMAT_YCBCR422, 10}, /* YUV422 10bit second */
+		{DRM_COLOR_FORMAT_YCBCR422, 8},  /* YUV422 8bit third */
+		{DRM_COLOR_FORMAT_RGB444, 6},    /* RGB 6bit fourth */
+		{DRM_COLOR_FORMAT_YCBCR420, 8},  /* YUV420 8bit last */
+	};
+
+	/* MST: limited options - NO 10bit, NO YUV420 -> RGB 8 -> YUV422 8 -> RGB 6 */
+	const struct fmt_prio_entry fmt_prio_mst[] = {
+		{DRM_COLOR_FORMAT_RGB444, 8},    /* RGB 8bit first */
+		{DRM_COLOR_FORMAT_YCBCR422, 8},  /* YUV422 8bit second */
+		{DRM_COLOR_FORMAT_RGB444, 6},    /* RGB 6bit last */
+	};
+
+	const struct fmt_prio_entry *fmt_prio;
+	int fmt_prio_size;
+	int start_idx = 0;
+
+	if (dp->mst.mst_active) {
+		fmt_prio = fmt_prio_mst;
+		fmt_prio_size = ARRAY_SIZE(fmt_prio_mst);
+		/* MST: suggest_bpc <= 6 means slot allocation failed once - skip RGB */
+		if (suggest_bpc <= 6) {
+			start_idx = 1; /* Start from YUV422 8bit */
+		}
+	} else {
+		fmt_prio = fmt_prio_sst;
+		fmt_prio_size = ARRAY_SIZE(fmt_prio_sst);
+	}
+
+	for (i = start_idx; i < fmt_prio_size; i++) {
 		color_format = fmt_prio[i].format;
-		if ((info_formats & color_format) ||
-		    drm_mode_is_420_only(info, adjusted_mode)) {
-			int curr_bpc = fmt_prio[i].bpc ? fmt_prio[i].bpc : suggest_bpc;
+		/* Only use 420_only flag for YUV420 format */
+		bool format_supported = (info_formats & color_format) ||
+					 (color_format == DRM_COLOR_FORMAT_YCBCR420 &&
+					  drm_mode_is_420_only(info, adjusted_mode));
+		if (format_supported) {
+			int fmt_bpc = fmt_prio[i].bpc;
+			int curr_bpc;
+
+			/* SST first entry (RGB): try suggest_bpc, also try 10bit if display supports it */
+			if (!dp->mst.mst_active && i == 0 && fmt_bpc == 0) {
+				curr_bpc = suggest_bpc;
+
+				/* Also try 10bit if display supports it */
+				if (suggest_bpc >= 10) {
+					success = compute_available_clock_rate(dp, connector_state,
+										10, adjusted_mode->clock,
+										color_format, &bpc, &bpp);
+					if (success)
+						break;
+				}
+			} else {
+				curr_bpc = fmt_bpc ? fmt_bpc : suggest_bpc;
+			}
 
 			success = compute_available_clock_rate(dp, connector_state,
 							       curr_bpc,
@@ -1037,8 +1083,14 @@ int trilin_dp_encoder_compute_config(struct drm_encoder *encoder,
 							       color_format, &bpc,
 							       &bpp);
 			if (success) {
-				if (color_format != DRM_COLOR_FORMAT_RGB444)
-					DP_INFO("Use YUV Format=0x%x", color_format);
+				/* Only log YUV success - keep log clean */
+				if (color_format != DRM_COLOR_FORMAT_RGB444) {
+					DP_INFO("success: format=%s bpc=%d bpp=%d",
+						color_format == DRM_COLOR_FORMAT_YCBCR422 ? "YUV422" :
+						color_format == DRM_COLOR_FORMAT_YCBCR420 ? "YUV420" :
+						color_format == DRM_COLOR_FORMAT_YCBCR444 ? "YUV444" : "UNKNOWN",
+						bpc, bpp);
+				}
 				break;
 			}
 		}
@@ -1161,7 +1213,7 @@ static void trilin_dp_rcsu_cfg_adapter(struct trilin_dp *dp, struct drm_connecto
 	int pipe_id = 0;
 	int offset;
 	u32 val;
-	struct trilin_connector *conn = &dp->connector;
+	struct trilin_connector *conn = connector_to_trilin(connector_state->connector);
 
 	if (IS_ERR_OR_NULL(dp->rcsu_iomem))
 		return;
@@ -1169,7 +1221,11 @@ static void trilin_dp_rcsu_cfg_adapter(struct trilin_dp *dp, struct drm_connecto
 	if (crtc && crtc->master)
 		pipe_id = crtc->master->id;
 
+	DP_DEBUG("rcsu_cfg_adapter: pipe_id=%d port=%d format=%d pixel_per_cycle=%d",
+		pipe_id, dp->cfg_adapter_port, conn->config.format, dp->pixel_per_cycle);
+
 	#define BIT31_30_MASK (3UL << 30)
+	#define BIT20_19_MASK (3UL << 19)
 	#define BIT18_17_MASK (3UL << 17)
 	#define BIT21_20_MASK (3UL << 20)
 
@@ -1197,16 +1253,16 @@ static void trilin_dp_rcsu_cfg_adapter(struct trilin_dp *dp, struct drm_connecto
 		/*For USBDP...*/
 		offset = pipe_id == 0 ? CFG_ADAPTER_VIDEO0_OFFSET : CFG_ADAPTER_VIDEO1_OFFSET;
 		val = readl(dp->rcsu_iomem + offset);
-		val &= ~BIT31_30_MASK;
+		val = pipe_id == 0 ? val & ~BIT31_30_MASK : val & ~BIT20_19_MASK;
 		// if use yuv. set rcsu.
 		if (conn->config.format == TRILIN_DPSUB_FORMAT_YCBCR422)
-			val |= (2UL << 30);
+			val = pipe_id == 0 ? val | (2UL << 30) : val | (2UL << 19);
 		else if (conn->config.format == TRILIN_DPSUB_FORMAT_YCBCR420)
-			val |= (3UL << 30);
+			val = pipe_id == 0 ? val | (3UL << 30) : val | (3UL << 19);
 
-		val &= ~BIT(29);
+		val = (pipe_id == 0 ? val & ~BIT(29) : val & ~BIT(18));
 		if (dp->pixel_per_cycle == 2)
-			val |= BIT(29);
+			val = (pipe_id == 0 ? val | BIT(29) : val | BIT(18));
 		writel(val, dp->rcsu_iomem + offset);
 	}
 	DP_DEBUG("set rcsu offset=%0x val=%0x", offset, val);
@@ -1217,7 +1273,7 @@ void trilin_dp_encoder_atomic_mode_set(
 	struct drm_connector_state *connector_state)
 {
 	struct trilin_dp *dp = encoder_to_dp(encoder);
-	struct trilin_connector *conn = &dp->connector;
+	struct trilin_connector *conn = connector_to_trilin(connector_state->connector);
 	struct drm_display_mode *adjusted_mode = &crtc_state->adjusted_mode;
 
 	DP_INFO("set mode: %s %d", adjusted_mode->name, adjusted_mode->clock);

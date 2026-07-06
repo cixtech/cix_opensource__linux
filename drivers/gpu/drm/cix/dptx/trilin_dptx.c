@@ -286,7 +286,7 @@ int trilin_dp_mode_configure(struct trilin_dp *dp, int pclock, u8 current_bw,
 	if (dp->mst.mst_active) {
 		MIN_LANE = max_lanes;
 		bw_code = max_link_rate_code;
-		DP_MST_INFO("set min_lan= %d bw=%d", MIN_LANE, bw_code);
+		DP_MST_DEBUG("set min_lan= %d bw=%d", MIN_LANE, bw_code);
 	}
 
 	for (lane_cnt = MIN_LANE; lane_cnt <= max_lanes; lane_cnt <<= 1) {
