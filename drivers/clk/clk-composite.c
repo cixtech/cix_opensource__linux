@@ -234,17 +234,6 @@ static void clk_composite_disable(struct clk_hw *hw)
 	gate_ops->disable(gate_hw);
 }
 
-static int clk_composite_prepare(struct clk_hw *hw)
-{
-	struct clk_composite *composite = to_clk_composite(hw);
-	const struct clk_ops *gate_ops = composite->gate_ops;
-	struct clk_hw *gate_hw = composite->gate_hw;
-
-	__clk_hw_set_clk(gate_hw, hw);
-
-	return gate_ops->prepare(gate_hw);
-}
-
 static struct clk_hw *__clk_hw_register_composite(struct device *dev,
 			const char *name, const char * const *parent_names,
 			const struct clk_parent_data *pdata, int num_parents,
@@ -335,9 +324,6 @@ static struct clk_hw *__clk_hw_register_composite(struct device *dev,
 		clk_composite_ops->is_enabled = clk_composite_is_enabled;
 		clk_composite_ops->enable = clk_composite_enable;
 		clk_composite_ops->disable = clk_composite_disable;
-
-		if (gate_ops->prepare)
-			clk_composite_ops->prepare = clk_composite_prepare;
 	}
 
 	init.ops = clk_composite_ops;
