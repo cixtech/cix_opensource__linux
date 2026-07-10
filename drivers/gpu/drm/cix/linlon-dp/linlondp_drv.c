@@ -421,7 +421,7 @@ int linlondp_cix_fwnode_add(struct drm_device *drm, struct device *dev)
 		for_each_available_child_of_node(dev->of_node, of_child) {
 			struct drm_connector *connector;
 
-			if (of_node_cmp(of_child->name, "pipeline") != 0)
+			if (of_node_cmp(of_child->full_name, "pipeline@0") != 0)
 				continue;
 
 			remote = of_graph_get_remote_node(of_child,
@@ -495,7 +495,7 @@ int linlondp_cix_fwnode_del(struct drm_device *drm, struct device *dev)
 			struct drm_connector *connector;
 			struct fwnode_handle *fwnode;
 
-			if (of_node_cmp(of_child->name, "pipeline") != 0)
+			if (of_node_cmp(of_child->full_name, "pipeline@0") != 0)
 				continue;
 
 			remote = of_graph_get_remote_node(of_child,

@@ -19,6 +19,12 @@
 		stdout-path = &uart2;
 	};
 
+	dpu_display_cluster: linlon-display-cluster {
+		compatible = "cix,linlon-display-cluster";
+		status = "okay";
+		dpus = <&dpu0 &dpu1 &dpu2 &dpu3 &dpu4>;
+	};
+
 	reg_usbc2_vbus: regulator-usb-c2 {
 		compatible = "regulator-fixed";
 		enable-active-high;
@@ -1214,6 +1220,7 @@
 
 &dpu0 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
@@ -1250,6 +1257,7 @@
 
 &dpu1 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
@@ -1286,6 +1294,7 @@
 
 &dpu2 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
@@ -1322,6 +1331,7 @@
 
 &dpu3 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
@@ -1358,6 +1368,7 @@
 
 &dpu4 {
 	status = "okay";
+	cix,linlon-dpu-slave;
 
 	aclk_freq_fixed = <800000000>;
 	pipeline@0 {
