@@ -51,14 +51,14 @@
 #include "armcb_v4l2_core.h"
 #include "system_logger.h"
 
-#ifdef CONFIG_PLAT_BBOX
-#include <linux/soc/cix/rdr_pub.h>
-#include <mntn_public_interface.h>
+#if (CONFIG_BBOX_VERSION >= 0x0200) //IS_ENABLED(CONFIG_PLAT_BBOX)
+#include <linux/soc/cix/bbox_pub.h>
+#include <linux/soc/cix/bbox_platform.h>
 #endif
 
 #define ARMCB_MODULE_NAME "armcb_v4l2_config"
 
-#ifdef CONFIG_PLAT_BBOX
+#if (CONFIG_BBOX_VERSION >= 0x0200) //IS_ENABLED(CONFIG_PLAT_BBOX)
 
 #if ARMCB_CSI_DMA_DUMP_RAW
 /* IMX219 3280x2464: CSIDMA LINE_STRIDE 0xF00 (3840 bytes/line) */
@@ -70,26 +70,24 @@
 u64 g_isp_addr;
 
 enum RDR_ISP_MODID {
-	RDR_ISP_MODID_START = PLAT_BB_MOD_ISP_START,
-	RDR_ISP_SOC_ISR_ERR_MODID,
-	RDR_ISP_MODID_END = PLAT_BB_MOD_ISP_END,
+	CORE_ISP_MODID_START = PLAT_BB_MOD_ISP_START,
+	CORE_ISP_SOC_ISR_ERR_MODID,
+	CORE_ISP_MODID_END = PLAT_BB_MOD_ISP_END,
 };
 
-static struct rdr_register_module_result g_current_info;
+static struct bbox_mem g_mem;
 
-static struct rdr_exception_info_s g_isp_einfo[] = {
+static struct bbox_exception_info g_isp_einfo[] = {
 	{ { 0, 0 },
-	  RDR_ISP_SOC_ISR_ERR_MODID,
-	  RDR_ISP_SOC_ISR_ERR_MODID,
-	  RDR_ERR,
-	  RDR_REBOOT_NO,
-	  RDR_ISP,
-	  RDR_ISP,
-	  RDR_ISP,
-	  (u32)RDR_REENTRANT_DISALLOW,
+	  CORE_ISP_SOC_ISR_ERR_MODID,
+	  BBOX_ERR,
+	  REBOOT_NO,
+	  CORE_ISP,
+	  CORE_ISP,
+	  CORE_ISP,
+	  (u32)REENTRANT_DISALLOW,
 	  ISP_S_EXCEPTION,
 	  0,
-	  (u32)RDR_UPLOAD_YES,
 	  "isp",
 	  "isp isr proc",
 	  0,
@@ -100,6 +98,7 @@ static struct rdr_exception_info_s g_isp_einfo[] = {
 static struct completion g_rdr_dump_comp;
 
 static int rdr_writen_num;
+static bool isp_bbox_enabled;
 
 /*
  * Description : Dump function of the AP when an exception occurs
@@ -109,39 +108,68 @@ static void cix_isp_rproc_rdr_dump(u32 modid, u32 etype, u64 coreid,
 {
 }
 
+static int cix_isp_rproc_rdr_register_core(void);
+static void cix_isp_rproc_rdr_unregister_core(void);
+
 /*
- * Description : register exception with the rdr
+ * Description : register exception with the rdr; skip all BBOX on failure.
  */
-static void cix_isp_rproc_rdr_register_exception(void)
+static bool cix_isp_bbox_init(void)
 {
 	unsigned int i;
 	int ret;
 
+	isp_bbox_enabled = false;
+
 	for (i = 0;
-	     i < sizeof(g_isp_einfo) / sizeof(struct rdr_exception_info_s);
+	     i < sizeof(g_isp_einfo) / sizeof(struct bbox_exception_info);
 	     i++) {
 		LOG(LOG_DEBUG, "register exception:%u",
-		    g_isp_einfo[i].e_exce_type);
-		ret = rdr_register_exception(&g_isp_einfo[i]);
+		    g_isp_einfo[i].exce_type);
+		ret = bbox_register_exception(&g_isp_einfo[i]);
 		if (ret == 0) {
-			LOG(LOG_ERR,
-			    "rdr_register_exception fail, ret = [%d]\n", ret);
-			return;
+			while (i > 0) {
+				i--;
+				bbox_unregister_exception(g_isp_einfo[i].modid);
+			}
+			LOG(LOG_WARN,
+			    "BBOX not ready, ISP continues without RDR/BBOX\n");
+			return false;
 		}
 	}
+
+	ret = cix_isp_rproc_rdr_register_core();
+	if (ret < 0) {
+		for (i = 0;
+		     i < sizeof(g_isp_einfo) / sizeof(struct bbox_exception_info);
+		     i++)
+			bbox_unregister_exception(g_isp_einfo[i].modid);
+		LOG(LOG_WARN,
+		    "BBOX core register failed (%d), ISP continues without RDR/BBOX\n",
+		    ret);
+		return false;
+	}
+
+	isp_bbox_enabled = true;
+	return true;
 }
 
-static void cix_isp_rproc_rdr_unregister_exception(void)
+static void cix_isp_bbox_deinit(void)
 {
 	unsigned int i;
 
+	if (!isp_bbox_enabled)
+		return;
+
+	cix_isp_rproc_rdr_unregister_core();
 	for (i = 0;
-	     i < sizeof(g_isp_einfo) / sizeof(struct rdr_exception_info_s);
-	     i++) {
-		LOG(LOG_DEBUG, "unregister exception:%u",
-		    g_isp_einfo[i].e_exce_type);
-		rdr_unregister_exception(g_isp_einfo[i].e_modid);
-	}
+	     i < sizeof(g_isp_einfo) / sizeof(struct bbox_exception_info);
+	     i++)
+		bbox_unregister_exception(g_isp_einfo[i].modid);
+
+	isp_bbox_enabled = false;
+	g_isp_addr = 0;
+	rdr_writen_num = 0;
 }
 
 /*
@@ -149,47 +177,37 @@ static void cix_isp_rproc_rdr_unregister_exception(void)
  */
 static int cix_isp_rproc_rdr_register_core(void)
 {
-	struct rdr_module_ops_pub s_isp_ops;
-	struct rdr_register_module_result retinfo;
-	u64 coreid = RDR_ISP;
+	struct bbox_core_ops s_isp_ops;
+	u64 coreid = CORE_ISP;
 	int ret;
 
-	s_isp_ops.ops_dump = cix_isp_rproc_rdr_dump;
-	s_isp_ops.ops_reset = NULL;
+	s_isp_ops.dump = cix_isp_rproc_rdr_dump;
+	s_isp_ops.reset = NULL;
 
-	ret = rdr_register_module_ops(coreid, &s_isp_ops, &retinfo);
+	ret = bbox_register_core(coreid, &s_isp_ops, &g_mem);
 	if (ret < 0) {
-		LOG(LOG_ERR, "rdr_register_module_ops fail, ret = [%d]\n", ret);
+		LOG(LOG_ERR, "bbox_register_core fail, ret = [%d]\n", ret);
 		return ret;
 	}
 
-	g_current_info.log_addr = retinfo.log_addr;
-	g_current_info.log_len = retinfo.log_len;
-	g_current_info.nve = retinfo.nve;
+	g_isp_addr = (u64)g_mem.vaddr;
 
-	g_isp_addr = (uintptr_t)rdr_bbox_map(g_current_info.log_addr,
-					     g_current_info.log_len);
-	if (!g_isp_addr) {
-		LOG(LOG_ERR, "hisi_bbox_map g_hisiap_addr fail\n");
-		return -1;
-	}
-
-	LOG(LOG_DEBUG, "%d: addr=0x%llx   [0x%llx], len=0x%x\n",
-	    __LINE__, g_current_info.log_addr, g_isp_addr,
-	    g_current_info.log_len);
+	LOG(LOG_DEBUG, "%d: addr=0x%llx   [0x%llx], len=0x%llx\n", __LINE__,
+	    g_mem.paddr, g_isp_addr, g_mem.size);
 
 	return ret;
 }
 
 static void cix_isp_rproc_rdr_unregister_core(void)
 {
-	u64 coreid = RDR_ISP;
+	u64 coreid = CORE_ISP;
 
-	rdr_unregister_module_ops(coreid);
+	bbox_unregister_core(coreid);
 }
 
 #endif
 
+static armcb_v4l2_config_dev_t *p_v4l_config_dev;
 typedef enum { ISP_TYPE_I5, ISP_TYPE_I5_CUS0, ISP_TYPE_I7 } armcb_isp_type_t;
 
 typedef i7_top_top_reg_44_t i7_frm_cnt_ctrl_t;
@@ -203,8 +221,6 @@ struct armcb_isp_info {
 	irqreturn_t (*isp_isr)(s32 irq, void *subdev);
 	irqreturn_t (*isp_err_isr)(s32 irq, void *subdev);
 };
-
-static armcb_v4l2_config_dev_t *p_v4l_config_dev;
 
 static irqreturn_t armcb_I5_isp_isr(s32 irq, void *pdev);
 static irqreturn_t armcb_I7_isp_isr(s32 irq, void *pdev);
@@ -1219,7 +1235,7 @@ static irqreturn_t armcb_I7_isp_err_isr(s32 irq, void *pdev)
 	i7_index_type_t int_id = { 0 };
 	unsigned long flags = 0;
 	unsigned int irq_clear = 0;
-#ifdef CONFIG_PLAT_BBOX
+#if (CONFIG_BBOX_VERSION >= 0x0200) //IS_ENABLED(CONFIG_PLAT_BBOX)
 	static const char start_flag_str[] = "ispDumpStart";
 	int start_flag_len = sizeof(start_flag_str) - 1;
 	int start_flag_num = (start_flag_len % 4 ? 1 : 0) + start_flag_len / 4;
@@ -1284,14 +1300,15 @@ static irqreturn_t armcb_I7_isp_err_isr(s32 irq, void *pdev)
 		if (irq_info.status) {
 			armcb_v4l2_config_queue_event(pvdev, &irq_info);
 
-#ifdef CONFIG_PLAT_BBOX
+#if (CONFIG_BBOX_VERSION >= 0x0200)//IS_ENABLED(CONFIG_PLAT_BBOX)
+			if (isp_bbox_enabled) {
 			/* asynchronous API */
 			/* error information
 			 * ERR/TOP/VIN/IFBC/IFBD/PSC/SCA status
 			 * Length measured in words (32bit)
 			 */
 			if ((rdr_writen_num + total_reg_num) * 4 <
-			    g_current_info.log_len) {
+			    g_mem.size) {
 				memcpy((void *)write_shift, start_flag_str,
 				       start_flag_len);
 				write_shift += start_flag_num * 4;
@@ -1327,7 +1344,8 @@ static irqreturn_t armcb_I7_isp_err_isr(s32 irq, void *pdev)
 				}
 				rdr_writen_num += total_reg_num;
 			}
-			rdr_system_error(RDR_ISP_SOC_ISR_ERR_MODID, 0, 0);
+			bbox_system_error(CORE_ISP_SOC_ISR_ERR_MODID, 0, 0);
+			}
 #endif
 		}
 		/*5. restore interrupt mask bit */
@@ -1956,27 +1974,16 @@ static int armcb_v4l2_config_probe(struct platform_device *pdev)
 	tasklet_init(&p_v4l_config_dev->buffer_done_task, buffer_done_handler,
 		     0UL);
 
-
-#ifdef CONFIG_PLAT_BBOX
 #if ARMCB_CSI_DMA_DUMP_RAW
 	ret = armcb_csi_dma_dump_set_buffer_size(CSIDMA_SIZE, &pdev->dev);
 #endif
-
+#if (CONFIG_BBOX_VERSION >= 0x0200)//IS_ENABLED(CONFIG_PLAT_BBOX)
 //#if 0
 	init_completion(&g_rdr_dump_comp);
-
-	cix_isp_rproc_rdr_register_exception();
-
-	ret = cix_isp_rproc_rdr_register_core();
-	if (ret) {
-		LOG(LOG_ERR,
-		    "cix_isp_rproc_rdr_register_core fail, ret = [%d]\n", ret);
-		goto err_rproc_add;
-	}
+	cix_isp_bbox_init();
 #endif
 	LOG(LOG_INFO,"register config %s",ret ? "failed":"success");
 	return ret;
-err_rproc_add:
 unreg_dev:
 	video_unregister_device(&p_v4l_config_dev->vid_cap_dev);
 	v4l2_device_put(&p_v4l_config_dev->v4l2_dev);
@@ -1989,9 +1996,8 @@ static int armcb_v4l2_config_remove(struct platform_device *pdev)
 {
 	int ret = 0;
 
-#ifdef CONFIG_PLAT_BBOX
-	cix_isp_rproc_rdr_unregister_core();
-	cix_isp_rproc_rdr_unregister_exception();
+#if (CONFIG_BBOX_VERSION >= 0x0200) //IS_ENABLED(CONFIG_PLAT_BBOX)
+	cix_isp_bbox_deinit();
 #endif
 
 	if (p_v4l_config_dev) {

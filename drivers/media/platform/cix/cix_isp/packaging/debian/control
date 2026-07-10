@@ -1,0 +1,18 @@
+Source: armcb-isp-dkms
+Maintainer: CIX ISP Maintainer <maintainer@example.com>
+Section: kernel
+Priority: optional
+Standards-Version: 4.5.1
+Build-Depends: debhelper-compat (= 12), rsync
+
+Package: armcb-isp-dkms
+Architecture: all
+Depends: ${misc:Depends}, dkms (>= 2.1.0.0)
+Recommends: build-essential, linux-headers-generic | linux-headers-arm64
+Description: CIX in-tree ISP driver (armcb_isp) DKMS source
+ Kernel ISP / camera driver for CIX SoC (armcb_isp.ko), matching
+ drivers/media/platform/cix/cix_isp in the CIX Linux tree.
+ .
+ This package ships source only. DKMS compiles against the running
+ kernel on the board (requires CIX kernel headers with PLAT_BBOX / DSM
+ options as used by the in-tree driver).

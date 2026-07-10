@@ -1,0 +1,26 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+PKG       = armcb-isp-dkms
+DKMS_NAME = armcb-isp
+DKMS_VER  = 1.0.0
+DEST      = debian/$(PKG)/usr/src/$(DKMS_NAME)-$(DKMS_VER)
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+override_dh_auto_build:
+override_dh_auto_test:
+override_dh_auto_install:
+	mkdir -p $(DEST)
+	rsync -a \
+	  --exclude='*.o' --exclude='*.ko' --exclude='*.mod' --exclude='*.mod.c' \
+	  --exclude='.*.cmd' --exclude='*.cmd' --exclude='*.bak' \
+	  --exclude='*.o.d' --exclude='*.a' \
+	  --exclude='Module.symvers' --exclude='modules.order' \
+	  --exclude='.git*' --exclude='debian' --exclude='packaging' \
+	  ./ $(DEST)/
+
+override_dh_auto_clean:

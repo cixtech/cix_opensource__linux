@@ -1,0 +1,5 @@
+armcb-isp-dkms (1.0.0) UNRELEASED; urgency=medium
+
+  * Initial DKMS packaging for linux/cix_isp (armcb_isp.ko).
+
+ -- CIX ISP Maintainer <maintainer@example.com>  Wed, 09 Jul 2026 00:00:00 +0000
