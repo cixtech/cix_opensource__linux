@@ -1511,6 +1511,7 @@ struct xhci_hub {
 
 /* There is one xhci_hcd structure per controller */
 struct xhci_hcd {
+	struct list_head list;		/* for xhci instance list */
 	struct usb_hcd *main_hcd;
 	struct usb_hcd *shared_hcd;
 	/* glue to PCI and HCD framework */

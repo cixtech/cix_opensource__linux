@@ -19,6 +19,7 @@
 #include <linux/slab.h>
 #include <linux/dmi.h>
 #include <linux/dma-mapping.h>
+#include <linux/reboot.h>
 
 #include "xhci.h"
 #include "xhci-trace.h"
@@ -38,6 +39,141 @@ MODULE_PARM_DESC(link_quirk, "Don't clear the chain bit on a link TRB");
 static unsigned long long quirks;
 module_param(quirks, ullong, S_IRUGO);
 MODULE_PARM_DESC(quirks, "Bit flags for quirks to be enabled as default");
+
+/* List of all xhci instances for reboot deadlock prevention */
+static LIST_HEAD(xhci_instance_list);
+static DEFINE_SPINLOCK(xhci_list_lock);
+
+/*
+ * Reboot notifier to break shutdown deadlock.
+ *
+ * During system reboot, the shutdown thread holds the parent device mutex
+ * while waiting for the USB device mutex. Meanwhile, a kworker thread holds
+ * the USB device mutex while waiting for xHCI command completion which will
+ * never come because the interrupt may be disabled or the controller may
+ * not respond anymore.
+ *
+ * This notifier runs BEFORE device_shutdown() and halts all xHCI controllers,
+ * completing all pending commands to wake up any waiting threads.
+ */
+static int xhci_reboot_notify(struct notifier_block *nb,
+			       unsigned long action, void *data)
+{
+	struct xhci_hcd *xhci;
+	struct xhci_hcd *xhci_array[16];  /* Support up to 16 xHCI controllers */
+	unsigned long flags;
+	int count = 0;
+	int i;
+
+	/* ================================================================
+	 * Phase 1: Collect all xHCI instance pointers while holding the
+	 *          global list lock ONLY for this very brief traversal.
+	 *
+	 * Take a reference on each usb_hcd via usb_get_hcd() to ensure
+	 * the xhci_hcd struct cannot be freed between Phase 1 and Phase 2,
+	 * preventing use-after-free when accessing xhci->list in Phase 2.
+	 *
+	 * IMPORTANT: We MUST NOT hold xhci->lock while holding the global
+	 * list_lock! That would cause lock ordering inversion and could
+	 * deadlock with xHCI interrupt handlers which also take xhci->lock.
+	 * ================================================================ */
+	spin_lock_irqsave(&xhci_list_lock, flags);
+	list_for_each_entry(xhci, &xhci_instance_list, list) {
+		if (WARN_ON_ONCE(count >= ARRAY_SIZE(xhci_array)))
+			break;
+		/* Grab reference to prevent free during unlocked window */
+		usb_get_hcd(xhci_to_hcd(xhci));
+		xhci_array[count++] = xhci;
+	}
+	spin_unlock_irqrestore(&xhci_list_lock, flags);
+
+	/* ================================================================
+	 * Phase 2: Process each controller individually, with proper
+	 *          use-after-free protection.
+	 *
+	 * Lock order: xhci->mutex -> xhci_list_lock -> xhci->lock
+	 * Matches xhci_stop() exactly to avoid AB-BA deadlock.
+	 *
+	 * Use mutex_trylock() instead of mutex_lock() to avoid blocking
+	 * for seconds during reboot. If xhci_setup_device() is holding
+	 * the mutex waiting for command completion, we can still safely
+	 * clean up commands with just the spinlock (see xhci_hc_died()).
+	 *
+	 * IRQs remain disabled while holding xhci->lock to prevent deadlock
+	 * with xhci_irq() which also takes xhci->lock from interrupt context.
+	 * ================================================================ */
+	for (i = 0; i < count; i++) {
+		struct xhci_hcd *xhci = xhci_array[i];
+
+		/*
+		 * Try to grab mutex FIRST to maintain lock ordering consistent
+		 * with xhci_stop(): mutex -> list_lock -> xhci->lock.
+		 *
+		 * If we can't get the mutex immediately, skip the mutex and
+		 * proceed with just the spinlock. xhci_cleanup_command_queue()
+		 * only needs the spinlock (consistent with xhci_hc_died() pattern).
+		 */
+		bool have_mutex = mutex_trylock(&xhci->mutex);
+
+		spin_lock_irqsave(&xhci_list_lock, flags);
+
+		/*
+		 * Check if this controller was removed from the list
+		 * during the unlocked window between Phase 1 and Phase 2.
+		 * list_empty() means xhci_stop() was called via list_del_init().
+		 */
+		if (list_empty(&xhci->list)) {
+			spin_unlock_irqrestore(&xhci_list_lock, flags);
+			if (have_mutex)
+				mutex_unlock(&xhci->mutex);
+			usb_put_hcd(xhci_to_hcd(xhci));
+			continue;
+		}
+		spin_unlock_irqrestore(&xhci_list_lock, flags);
+
+		/* Keep IRQs disabled while holding xhci->lock to avoid IRQ deadlock */
+		spin_lock_irqsave(&xhci->lock, flags);
+
+		/*
+		 * Close the "shop": prevent any NEW commands from being queued.
+		 * XHCI_STATE_HALTED is checked at the BEGINNING of queue_command()
+		 * and causes all new submissions to return -ESHUTDOWN immediately.
+		 */
+		xhci->xhc_state |= XHCI_STATE_HALTED;
+
+		/*
+		 * Complete all EXISTING pending commands to wake up waiting threads.
+		 * No need to actually halt the controller - we just need
+		 * to break the deadlock so shutdown can proceed.
+		 *
+		 * Protected by xhci->lock (optionally also by mutex if we got it).
+		 * Consistent with xhci_hc_died() which also only uses the spinlock.
+		 */
+		xhci_cleanup_command_queue(xhci);
+
+		spin_unlock_irqrestore(&xhci->lock, flags);
+
+		if (have_mutex)
+			mutex_unlock(&xhci->mutex);
+
+		/* Release the reference we took in Phase 1 */
+		usb_put_hcd(xhci_to_hcd(xhci));
+	}
+
+	/*
+	 * Give other CPUs time to schedule the threads we just woke up.
+	 * Without this delay, stop_other_cpus() might stop the other CPUs
+	 * before kworkers have a chance to run and release their mutexes.
+	 */
+	msleep(3);
+	return NOTIFY_OK;
+}
+
+
+static struct notifier_block xhci_reboot_nb = {
+	.notifier_call = xhci_reboot_notify,
+	.priority = INT_MAX,	/* Run early, before device shutdown */
+};
 
 static bool td_on_ring(struct xhci_td *td, struct xhci_ring *ring)
 {
@@ -561,8 +697,34 @@ int xhci_run(struct usb_hcd *hcd)
 
 	xhci_debugfs_init(xhci);
 
+	if (xhci_has_one_roothub(xhci)) {
+		ret = xhci_run_finished(xhci);
+		if (ret)
+			return ret;
+	}
+
+	/*
+	 * Add to instance list for reboot deadlock prevention.
+	 * Must be done AFTER all init functions succeed to avoid
+	 * use-after-free if probe fails and xhci_stop() is not called.
+	 *
+	 * Check list_empty() before adding because xhci_run() can be
+	 * called multiple times (e.g., during S3 resume with reinit_xhc).
+	 */
+	spin_lock_irq(&xhci_list_lock);
+	if (list_empty(&xhci->list))
+		list_add(&xhci->list, &xhci_instance_list);
+	spin_unlock_irq(&xhci_list_lock);
+
+	/*
+	 * Single-roothub controllers (e.g. xhci-plat on CIX platforms)
+	 * don't have a shared HCD. The DEFER_RH_REGISTER flag recovery
+	 * mechanism depends on usb_add_hcd() being called for the shared
+	 * HCD, which never happens. So we must return early here to
+	 * avoid leaving the roothub unregistered.
+	 */
 	if (xhci_has_one_roothub(xhci))
-		return xhci_run_finished(xhci);
+		return 0;
 
 	set_bit(HCD_FLAG_DEFER_RH_REGISTER, &hcd->flags);
 
@@ -594,6 +756,11 @@ void xhci_stop(struct usb_hcd *hcd)
 	}
 
 	xhci_remove_dbc_dev(xhci);
+
+	/* Remove from instance list */
+	spin_lock_irq(&xhci_list_lock);
+	list_del_init(&xhci->list);
+	spin_unlock_irq(&xhci_list_lock);
 
 	spin_lock_irq(&xhci->lock);
 	xhci->xhc_state |= XHCI_STATE_HALTED;
@@ -5221,6 +5388,7 @@ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks)
 	}
 
 	mutex_init(&xhci->mutex);
+	INIT_LIST_HEAD(&xhci->list);
 	xhci->main_hcd = hcd;
 	xhci->cap_regs = hcd->regs;
 	xhci->op_regs = hcd->regs +
@@ -5462,6 +5630,8 @@ static int __init xhci_hcd_init(void)
 	xhci_debugfs_create_root();
 	xhci_dbc_init();
 
+	register_reboot_notifier(&xhci_reboot_nb);
+
 	return 0;
 }
 
@@ -5473,6 +5643,13 @@ static void __exit xhci_hcd_fini(void)
 {
 	xhci_debugfs_remove_root();
 	xhci_dbc_exit();
+
+	/*
+	 * Unregister reboot notifier to prevent use-after-free when
+	 * the module is unloaded. The notifier chain would still
+	 * contain a pointer to our function which gets unmapped.
+	 */
+	unregister_reboot_notifier(&xhci_reboot_nb);
 }
 
 module_init(xhci_hcd_init);
