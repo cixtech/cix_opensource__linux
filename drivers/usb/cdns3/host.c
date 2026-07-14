@@ -11,6 +11,8 @@
 
 #include <linux/platform_device.h>
 #include <linux/slab.h>
+#include <linux/delay.h>
+#include <linux/pm_runtime.h>
 #include "core.h"
 #include "drd.h"
 #include "host-export.h"
@@ -65,6 +67,99 @@ static const struct xhci_plat_priv xhci_plat_cdns3_xhci = {
 static const struct xhci_plat_priv xhci_plat_cdnsp_xhci = {
 	.quirks = XHCI_CDNS_SCTX_QUIRK | XHCI_SKIP_PHY_INIT | XHCI_HW_LPM_DISABLE,
 };
+
+/*
+ * On a warm reboot the board keeps VBUS asserted in HW, so a USB3 device that
+ * was already attached before the reboot never power-cycles: its SuperSpeed
+ * link gets stuck in Polling and never reaches U0, so no connect event is
+ * raised and the device is never enumerated. The hub thread only issues a warm
+ * reset for links in SS.Inactive/Compliance (not Polling), so by itself it just
+ * waits forever. By the time this runs the controller is up and the root hubs
+ * are polling, so force a warm reset on any USB3 port stuck in
+ * Polling/Compliance/Inactive to make the far-end LTSSM retrain from scratch -
+ * which is what a manual unbind/bind of the xHCI ends up doing. PORTSC is
+ * passed through xhci_port_state_to_neutral() so the RW1C change bits are
+ * preserved, and writes are serialized against the xHCI irq/hub paths.
+ *
+ * USB2-only controllers do not need this: a USB2 device is detected via its
+ * static D+/D- pull-up, which the initial root-hub scan already sees.
+ */
+static void cdns_host_reset_stuck_ss_ports(struct usb_hcd *hcd)
+{
+	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+	struct device *xdev = hcd->self.controller;
+	unsigned long flags;
+	u32 kicked_mask = 0;
+	bool kicked = false;
+	u32 portsc, pls;
+	int wait_ms;
+	int i;
+
+	if (!xhci->usb3_rhub.num_ports)
+		return;
+
+	/*
+	 * This controller autosuspends aggressively (short delay). Hold a PM
+	 * reference across the whole sequence: if it dropped to D3 the clocks
+	 * would be gated and the port status change would be lost.
+	 */
+	pm_runtime_get_sync(xdev);
+
+	/* Nothing to do (and unsafe to touch PORTSC) if the HC is not running. */
+	if (xhci->xhc_state & (XHCI_STATE_DYING | XHCI_STATE_HALTED))
+		goto out;
+
+	/* Let the ports settle into RxDetect/Polling after xhci_run(). */
+	msleep(20);
+
+	spin_lock_irqsave(&xhci->lock, flags);
+	for (i = 0; i < xhci->usb3_rhub.num_ports; i++) {
+		portsc = readl(xhci->usb3_rhub.ports[i]->addr);
+		pls = portsc & PORT_PLS_MASK;
+
+		/* Leave already-enabled ports and idle empty ports alone. */
+		if (portsc & PORT_PE)
+			continue;
+		if (pls != XDEV_POLLING && pls != XDEV_COMP_MODE &&
+		    pls != XDEV_INACTIVE)
+			continue;
+
+		portsc = xhci_port_state_to_neutral(portsc);
+		writel(portsc | PORT_WR, xhci->usb3_rhub.ports[i]->addr);
+		readl(xhci->usb3_rhub.ports[i]->addr); /* flush */
+		kicked_mask |= BIT(i);
+		kicked = true;
+	}
+	spin_unlock_irqrestore(&xhci->lock, flags);
+
+	/*
+	 * Only when we actually kicked a warm reset, wait for the link to finish
+	 * training and raise a port status change so the hub thread enumerates
+	 * the device (and so autosuspend does not gate clocks meanwhile). Poll so
+	 * we return as soon as every kicked port has left the stuck state instead
+	 * of always burning a fixed delay; cap the wait as a backstop.
+	 */
+	for (wait_ms = 0; kicked_mask && wait_ms < 200; wait_ms += 10) {
+		msleep(10);
+		for (i = 0; i < xhci->usb3_rhub.num_ports; i++) {
+			if (!(kicked_mask & BIT(i)))
+				continue;
+			pls = readl(xhci->usb3_rhub.ports[i]->addr) & PORT_PLS_MASK;
+			if (pls != XDEV_POLLING && pls != XDEV_COMP_MODE &&
+			    pls != XDEV_INACTIVE)
+				kicked_mask &= ~BIT(i);
+		}
+	}
+
+	if (kicked)
+		for (i = 0; i < xhci->usb3_rhub.num_ports; i++)
+			dev_dbg(xdev, "ss port%d portsc=0x%08x\n", i,
+				readl(xhci->usb3_rhub.ports[i]->addr));
+
+out:
+	pm_runtime_mark_last_busy(xdev);
+	pm_runtime_put_autosuspend(xdev);
+}
 
 static int cdns_host_restore(struct cdns *cdns)
 {
@@ -156,6 +251,17 @@ static int __cdns_host_init(struct cdns *cdns)
 	hcd = platform_get_drvdata(xhci);
 	if (hcd)
 		cdns->xhci_regs = hcd->regs;
+
+	/*
+	 * The CDNSP host keeps VBUS asserted across a warm reboot, so a device
+	 * attached before the reboot never generates a connect event for the
+	 * re-initialized controller. Warm reset any USB3 port left stuck in
+	 * Polling now that the root hubs are up so such devices get enumerated.
+	 */
+	dev_dbg(cdns->dev, "cdns host init done: version=%d hcd=%p\n",
+		cdns->version, hcd);
+	if (hcd && cdns->version >= CDNSP_CONTROLLER_V2)
+		cdns_host_reset_stuck_ss_ports(hcd);
 
 	return 0;
 
