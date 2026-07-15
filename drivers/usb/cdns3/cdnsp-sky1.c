@@ -225,11 +225,6 @@ static int cdns_sky1_platform_suspend(struct device *dev,
 	xhci = hcd_to_xhci(hcd);
 
 	if (suspend) {
-		/* Disable IRQ during D3 entry polling to prevent IRQ storm */
-		if (hcd->irq > 0)
-			disable_irq(hcd->irq);
-			synchronize_irq(hcd->irq);
-
 		/* SW request low power when all usb ports allow to it ??? */
 		while (count--) {
 			value = readl(hcd->regs + XECP_PM_PMCSR);
@@ -246,9 +241,7 @@ static int cdns_sky1_platform_suspend(struct device *dev,
 				break;
 			}
 		}
-		/* Re-enable IRQ after D3 entry polling completes */
-		if (hcd->irq > 0)
-			enable_irq(hcd->irq);
+
 	} else {
 		while (count--) {
 			value = readl(hcd->regs + XECP_PM_PMCSR);
