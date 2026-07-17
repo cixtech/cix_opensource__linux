@@ -214,15 +214,9 @@ static void husb311_remove(struct i2c_client *client)
 
 static int husb311_pm_suspend(struct device *dev)
 {
-	struct husb311_chip *chip = dev->driver_data;
+	struct husb311_chip *chip = dev_get_drvdata(dev);
 	int ret = 0;
 	u8 pwr;
-
-	disable_irq(chip->irq);
-	if (device_may_wakeup(dev)) {
-		enable_irq_wake(chip->irq);
-		dev_info(dev, "enable wake");
-	}
 
 	/*
 	 * Disable 12M oscillator to save power consumption, and it will be
@@ -237,20 +231,25 @@ static int husb311_pm_suspend(struct device *dev)
 	if (ret < 0)
 		return ret;
 
+	disable_irq(chip->irq);
+	if (device_may_wakeup(dev)) {
+		enable_irq_wake(chip->irq);
+		dev_dbg(dev, "enable wake");
+	}
+
 	return 0;
 }
 
 static int husb311_pm_resume(struct device *dev)
 {
-	struct husb311_chip *chip = dev->driver_data;
+	struct husb311_chip *chip = dev_get_drvdata(dev);
 	int ret = 0;
 	u8 pwr;
 
 	if (device_may_wakeup(dev)) {
 		disable_irq_wake(chip->irq);
-		dev_info(dev, "disable wake");
+		dev_dbg(dev, "disable wake");
 	}
-	enable_irq(chip->irq);
 
 	/*
 	 * When the power of husb311 is lost or i2c read failed in PM S/R
@@ -260,14 +259,12 @@ static int husb311_pm_resume(struct device *dev)
 	ret = husb311_read8(chip, HUSB311_TCPC_POWER, &pwr);
 	if (pwr & BIT(0) || ret < 0) {
 		ret = husb311_sw_reset(chip);
-		if (ret < 0) {
+		if (ret < 0)
 			dev_err(chip->dev, "fail to soft reset, ret = %d\n", ret);
-			return ret;
-		}
-
-		tcpm_tcpc_reset(tcpci_get_tcpm_port(chip->tcpci));
+		else
+			tcpm_tcpc_reset(tcpci_get_tcpm_port(chip->tcpci));
 	}
-
+	enable_irq(chip->irq);
 	return 0;
 }
 
@@ -277,7 +274,7 @@ static void husb311_pm_shutdown(struct i2c_client *client)
 		disable_irq(client->irq);
 		if (device_may_wakeup(&client->dev)) {
 			enable_irq_wake(client->irq);
-			dev_info(&client->dev, "enable wake");
+			dev_dbg(&client->dev, "enable wake");
 		}
 	}
 }
@@ -306,7 +303,7 @@ static const struct dev_pm_ops husb311_pm_ops = {
 	.suspend = husb311_pm_suspend,
 	.resume = husb311_pm_resume,
 	.freeze = husb311_pm_suspend,
-    .thaw = husb311_pm_resume,
+	.thaw = husb311_pm_resume,
 };
 
 static struct i2c_driver husb311_i2c_driver = {
@@ -319,7 +316,7 @@ static struct i2c_driver husb311_i2c_driver = {
 	.probe = husb311_probe,
 	.remove = husb311_remove,
 	.id_table = husb311_id,
-	.shutdown = husb311_pm_shutdown
+	.shutdown = husb311_pm_shutdown,
 };
 module_i2c_driver(husb311_i2c_driver);
 
