@@ -815,8 +815,13 @@ static int cdnsp_sky1_find_gadget_match(struct device *dev, void *data)
 	 * The gadget device is registered on the gadget bus with name
 	 * "gadget.%d" (see usb_add_gadget_udc -> dev_set_name).
 	 * It sits on the gadget bus and has the function driver bound to it.
+	 * Verify the device is on the gadget bus by checking the bus name.
+	 * This prevents matching devices that happen to have "gadget." prefix
+	 * in their name but are not real gadget devices, and also avoids
+	 * NULL pointer dereference when device bus is being removed.
 	 */
-	if (name && !strncmp(name, GADGET_DEV_NAME_PREFIX,
+	if (name && dev->bus && !strcmp(dev->bus->name, "gadget") &&
+	    !strncmp(name, GADGET_DEV_NAME_PREFIX,
 				strlen(GADGET_DEV_NAME_PREFIX))) {
 		*gadget_dev = dev;
 		return 1;
