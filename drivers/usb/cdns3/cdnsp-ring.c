@@ -1535,6 +1535,14 @@ irqreturn_t cdnsp_thread_irq_handler(int irq, void *data)
 	union cdnsp_trb *event_ring_deq;
 	unsigned long flags;
 	int counter = 0;
+	/*
+	 * Limit the maximum number of events processed in one loop to
+	 * prevent holding off softirqs (including RCU) for too long.
+	 * Under high network load, events may continuously arrive which
+	 * would otherwise cause the loop to run indefinitely, leading to
+	 * RCU stalls.
+	 */
+	int max_events = TRBS_PER_SEGMENT;
 
 	local_bh_disable();
 	spin_lock_irqsave(&pdev->lock, flags);
@@ -1555,11 +1563,20 @@ irqreturn_t cdnsp_thread_irq_handler(int irq, void *data)
 
 	event_ring_deq = pdev->event_ring->dequeue;
 
-	while (cdnsp_handle_event(pdev)) {
+	while (cdnsp_handle_event(pdev) && --max_events > 0) {
 		if (++counter >= TRBS_PER_EV_DEQ_UPDATE) {
 			cdnsp_update_erst_dequeue(pdev, event_ring_deq, 0);
 			event_ring_deq = pdev->event_ring->dequeue;
 			counter = 0;
+
+			/*
+			 * Check if rescheduling is needed. If so, break out
+			 * of the loop to allow higher priority tasks to run.
+			 * The remaining events will be handled by the next
+			 * interrupt.
+			 */
+			if (need_resched())
+				break;
 		}
 	}
 
