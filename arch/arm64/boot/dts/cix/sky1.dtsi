@@ -197,6 +197,7 @@
 			};
 		};
 
+		/* Hayes (Cortex-A520): L1I/L1D 32KB */
 		CPU0: cpu0@0 {
 			compatible = "arm,armv8";
 			reg = <0x0 0x0>;
@@ -206,6 +207,12 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_0 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <403>;
+			i-cache-size = <32768>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <128>;
+			d-cache-size = <32768>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <128>;
 		};
 
 		CPU1: cpu1@100 {
@@ -217,6 +224,12 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_0 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <403>;
+			i-cache-size = <32768>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <128>;
+			d-cache-size = <32768>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <128>;
 		};
 
 		CPU2: cpu2@200 {
@@ -228,6 +241,12 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_0 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <403>;
+			i-cache-size = <32768>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <128>;
+			d-cache-size = <32768>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <128>;
 		};
 
 		CPU3: cpu3@300 {
@@ -239,8 +258,15 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_0 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <403>;
+			i-cache-size = <32768>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <128>;
+			d-cache-size = <32768>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <128>;
 		};
 
+		/* Hunter (Cortex-A720): L1I/L1D 64KB -> private L2 512KB -> DSU L3 */
 		CPU4: cpu4@400 {
 			compatible = "arm,armv8";
 			reg = <0x0 0x400>;
@@ -250,6 +276,13 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_1 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <1024>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_4>;
 		};
 
 		CPU5: cpu5@500 {
@@ -261,6 +294,13 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_1 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <1024>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_5>;
 		};
 
 		CPU6: cpu6@600 {
@@ -272,6 +312,13 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_1 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <1024>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_6>;
 		};
 
 		CPU7: cpu7@700 {
@@ -283,6 +330,13 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_1 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <1024>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_7>;
 		};
 
 		CPU8: cpu8@800 {
@@ -294,6 +348,13 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_1 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <1024>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_8>;
 		};
 
 		CPU9: cpu9@900 {
@@ -305,6 +366,13 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_1 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <1024>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_9>;
 		};
 
 		CPU10: cpu10@a00 {
@@ -316,6 +384,13 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_1 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <1024>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_10>;
 		};
 
 		CPU11: cpu11@b00 {
@@ -327,6 +402,104 @@
 			#cooling-cells = <2>;
 			cpu-idle-states = <&CPU_SLEEP_1 &CLUSTER_SLEEP_0>;
 			capacity-dmips-mhz = <1024>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_11>;
+		};
+
+		/* Hunter private L2: 8-ways, 1024 sets, 512KB, line 64 */
+		l2_cache_4: l2-cache-4 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			cache-level = <2>;
+			cache-unified;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_5: l2-cache-5 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			cache-level = <2>;
+			cache-unified;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_6: l2-cache-6 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			cache-level = <2>;
+			cache-unified;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_7: l2-cache-7 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			cache-level = <2>;
+			cache-unified;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_8: l2-cache-8 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			cache-level = <2>;
+			cache-unified;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_9: l2-cache-9 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			cache-level = <2>;
+			cache-unified;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_10: l2-cache-10 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			cache-level = <2>;
+			cache-unified;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_11: l2-cache-11 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			cache-level = <2>;
+			cache-unified;
+			next-level-cache = <&l3_cache>;
+		};
+
+		/* DSU shared L3: 12-ways, 16384 sets, 12MB, line 64 */
+		l3_cache: l3-cache {
+			compatible = "cache";
+			cache-size = <12582912>;
+			cache-line-size = <64>;
+			cache-sets = <16384>;
+			cache-level = <3>;
+			cache-unified;
 		};
 	};
 
