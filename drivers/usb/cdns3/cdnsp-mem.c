@@ -866,7 +866,8 @@ static unsigned int cdnsp_get_endpoint_interval(struct usb_gadget *g,
 static u32 cdnsp_get_endpoint_mult(struct usb_gadget *g, struct cdnsp_ep *pep)
 {
 	if (g->speed < USB_SPEED_SUPER ||
-	    !usb_endpoint_xfer_isoc(pep->endpoint.desc) || g->speed >= USB_SPEED_SUPER_PLUS)
+	    !usb_endpoint_xfer_isoc(pep->endpoint.desc) || g->speed >= USB_SPEED_SUPER_PLUS ||
+	    !pep->endpoint.comp_desc)
 		return 0;
 
 	return pep->endpoint.comp_desc->bmAttributes;
@@ -876,7 +877,7 @@ static u32 cdnsp_get_endpoint_max_burst(struct usb_gadget *g,
 					struct cdnsp_ep *pep)
 {
 	/* Super speed and Plus have max burst in ep companion desc */
-	if (g->speed >= USB_SPEED_SUPER)
+	if (g->speed >= USB_SPEED_SUPER && pep->endpoint.comp_desc)
 		return pep->endpoint.comp_desc->bMaxBurst;
 
 	if (g->speed == USB_SPEED_HIGH &&
@@ -924,11 +925,11 @@ static u32 cdnsp_get_max_esit_payload(struct usb_gadget *g,
 		return 0;
 
 	/* SuperSpeedPlus Isoc ep sending over 48k per EIST. */
-	if (g->speed >= USB_SPEED_SUPER_PLUS &&
+	if (g->speed >= USB_SPEED_SUPER_PLUS && pep->endpoint.comp_desc &&
 	    USB_SS_SSP_ISOC_COMP(pep->endpoint.desc->bmAttributes))
 		return le16_to_cpu(pep->endpoint.comp_desc->wBytesPerInterval);
 	/* SuperSpeed or SuperSpeedPlus Isoc ep with less than 48k per esit */
-	else if (g->speed >= USB_SPEED_SUPER)
+	else if (g->speed >= USB_SPEED_SUPER && pep->endpoint.comp_desc)
 		return le16_to_cpu(pep->endpoint.comp_desc->wBytesPerInterval);
 
 	max_packet = usb_endpoint_maxp(pep->endpoint.desc);
