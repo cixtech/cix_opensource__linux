@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-only
+menuconfig CIX_SYSCTL
+	bool "Cix PM fan mode sysctl"
+	default n
+	depends on ARCH_CIX
+	help
+	  Say yes here to support CIX PM fan mode control via a vendor
+	  driver that talks AP<->PM IPC directly (same wire format as
+	  ACPI SFMD: attr 0xc7f / msg 0x802). Does not require SCMI
+	  protocol 0x82 or PM_EXCEPTION_PROTOCOL.
+
+if CIX_SYSCTL
+
+config CIX_SYSCTL_DRIVER
+	bool "Enable CIX PM fan mode sysfs driver"
+	default n
+	help
+	  Expose /sys/cix_scmi_fan/{mode,available_mode}. Enable the
+	  matching DT node (cix,pm-fan-mode) on boards that need it.
+
+endif #CIX_SYSCTL

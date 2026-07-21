@@ -45,6 +45,7 @@ config CIX_AP2SE_IPC
 
 if SOC_CIX
 source "drivers/soc/cix/cix_dst/Kconfig"
+source "drivers/soc/cix/cix_sysctl/Kconfig"
 endif #SOC_CIX
 
 menu "Cix Performance"

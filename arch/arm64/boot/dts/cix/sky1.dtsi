@@ -3727,6 +3727,16 @@
 		status = "disabled";
 	};
 
+	/*
+	 * Direct AP->PM fan-mode IPC (same PA as ap2pm shmem + doorbell@0x80).
+	 * Shares the physical channel with ap_to_pm_scmi; enable per board.
+	 */
+	cix_pm_fan: cix-pm-fan@6590000 {
+		compatible = "cix,pm-fan-mode";
+		reg = <0x0 0x06590000 0x0 0x84>;
+		status = "disabled";
+	};
+
 	pm2ap_scmi_mem: pm2pm-shmem@0 {
 		compatible = "arm,scmi-shmem";
 		#address-cells = <2>;

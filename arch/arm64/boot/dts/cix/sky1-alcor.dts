@@ -2361,6 +2361,10 @@
 	status = "okay";
 };
 
+&cix_pm_fan {
+	status = "okay";
+};
+
 &thermal_zones {
 	tz-cpu-6-7 {
 		polling-delay-passive = <100>;
