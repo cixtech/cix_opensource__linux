@@ -2567,6 +2567,13 @@ static int sky1_pcie_remove(struct platform_device *pdev)
 	sky1_pcie_debugfs_exit(pcie);
 	sky1_pcie_en_ep_on(pcie, false);
 	sky1_pcie_en_ep_power(pcie, false);
+
+	/*
+	 * Serialize x211 shared-PHY teardown against siblings' reset. clear
+	 * + finish print must stay x211-only: non-x211 remove used to clear
+	 * shared a/d while an x211 was between assert and deassert.
+	 */
+	sky1_pcie_x211_enum_lock(pcie, true);
 	phy_power_off(pcie->pcie_phy);
 	phy_exit(pcie->pcie_phy);
 	sky1_pcie_ctrl_set_axi_clk_en(pcie, false);
@@ -2584,11 +2591,15 @@ static int sky1_pcie_remove(struct platform_device *pdev)
 		sky1_pcie_phy_rst(pcie, 0x0);
 	sky1_pcie_set_x211_phy_rst_assert(pcie);
 
-	mutex_lock(&sky1_init_mutex);
-	if (atomic_read(&x211_phy_rst_finish_cnt) == 0)
-		sky1_pcie_clear_x211_cnt();
-	mutex_unlock(&sky1_init_mutex);
+	if (sky1_pcie_is_x211(pcie)) {
+		mutex_lock(&sky1_init_mutex);
+		if (atomic_read(&x211_phy_rst_finish_cnt) == 0)
+			sky1_pcie_clear_x211_cnt();
+		mutex_unlock(&sky1_init_mutex);
+	}
 	sky1_pcie_set_refclk(pcie, false);
+	sky1_pcie_x211_enum_lock(pcie, false);
+
 	if (pcie->is_probe) {
 		list_del(&pcie->list);
 		if (list_empty(&sky1_pcie_list))
