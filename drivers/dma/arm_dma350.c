@@ -1445,10 +1445,7 @@ static int arm_dma350_probe(struct platform_device *op)
 of_dma_register_fail:
 	dma_async_device_unregister(&d->slave);
 clk_dis:
-	if (d->is_clk_enable_atomic)
-		clk_disable(d->clk);
-	else
-		clk_disable_unprepare(d->clk);
+	clk_disable_unprepare(d->clk);
 	return ret;
 }
 
@@ -1466,11 +1463,7 @@ static int arm_dma350_remove(struct platform_device *op)
 	list_for_each_entry_safe(c, cn, &d->slave.channels, vc.chan.device_node) {
 		list_del(&c->vc.chan.device_node);
 	}
-	if (d->is_clk_enable_atomic)
-		clk_disable(d->clk);
-	else
-		clk_disable_unprepare(d->clk);
-
+	clk_disable_unprepare(d->clk);
 	return 0;
 }
 
@@ -1513,12 +1506,16 @@ static int arm_dma350_runtime_resume_dev(struct device *dev)
 static int arm_dma350_suspend_dev(struct device *dev)
 {
 	int ret = 0;
+	struct arm_dma350_dev *d = dev_get_drvdata(dev);
 
 	ret = pm_runtime_force_suspend(dev);
 	if (ret) {
 		dev_err(dev, "Force suspend error.\n");
 		return ret;
 	}
+
+	if (d->is_clk_enable_atomic)
+		clk_unprepare(d->clk);
 
 	return 0;
 }
@@ -1532,6 +1529,14 @@ static int arm_dma350_resume_dev(struct device *dev)
 		reset_control_assert(d->dma_reset);
 		udelay(2);
 		reset_control_deassert(d->dma_reset);
+	}
+
+	if (d->is_clk_enable_atomic) {
+		ret = clk_prepare(d->clk);
+		if (ret) {
+			dev_err(dev, "clk_prepare failed: %d\n", ret);
+			return ret;
+		}
 	}
 
 	ret = pm_runtime_force_resume(dev);
