@@ -91,63 +91,76 @@ static int xhci_reboot_notify(struct notifier_block *nb,
 	 * Phase 2: Process each controller individually, with proper
 	 *          use-after-free protection.
 	 *
-	 * Lock order: xhci->mutex -> xhci_list_lock -> xhci->lock
-	 * Matches xhci_stop() exactly to avoid AB-BA deadlock.
+	 * Lock order matches xhci_stop(): mutex -> list_lock -> xhci->lock
+	 *
+	 * To avoid AB-BA deadlock, we NEVER hold list_lock and mutex
+	 * at the same time. We verify the controller first (with list_lock),
+	 * release it, then optionally grab mutex (with trylock).
 	 *
 	 * Use mutex_trylock() instead of mutex_lock() to avoid blocking
 	 * for seconds during reboot. If xhci_setup_device() is holding
 	 * the mutex waiting for command completion, we can still safely
 	 * clean up commands with just the spinlock (see xhci_hc_died()).
+	 * Note: Unlike xhci_hc_died() which sets XHCI_STATE_DYING, we
+	 * intentionally do NOT set XHCI_STATE_HALTED because that would
+	 * cause xhci_irq() to drop ALL interrupts, leading to SCSI sync
+	 * cache timeouts and RCU stalls. Interrupts must keep working!
 	 *
 	 * IRQs remain disabled while holding xhci->lock to prevent deadlock
 	 * with xhci_irq() which also takes xhci->lock from interrupt context.
 	 * ================================================================ */
 	for (i = 0; i < count; i++) {
 		struct xhci_hcd *xhci = xhci_array[i];
+		bool have_mutex;
+		bool still_on_list;
 
 		/*
-		 * Try to grab mutex FIRST to maintain lock ordering consistent
-		 * with xhci_stop(): mutex -> list_lock -> xhci->lock.
+		 * First check if this controller is still on the list
+		 * while holding xhci_list_lock. If it was removed from
+		 * the list during Phase 1, we skip it entirely.
 		 *
-		 * If we can't get the mutex immediately, skip the mutex and
-		 * proceed with just the spinlock. xhci_cleanup_command_queue()
-		 * only needs the spinlock (consistent with xhci_hc_died() pattern).
+		 * IMPORTANT: list_lock is RELEASED before we try to grab
+		 * mutex. This ensures we NEVER hold both locks at the same
+		 * time, which would create AB-BA deadlock risk with xhci_stop()
+		 * that takes mutex FIRST then list_lock.
 		 */
-		bool have_mutex = mutex_trylock(&xhci->mutex);
-
 		spin_lock_irqsave(&xhci_list_lock, flags);
+		still_on_list = !list_empty(&xhci->list);
+		spin_unlock_irqrestore(&xhci_list_lock, flags);
 
-		/*
-		 * Check if this controller was removed from the list
-		 * during the unlocked window between Phase 1 and Phase 2.
-		 * list_empty() means xhci_stop() was called via list_del_init().
-		 */
-		if (list_empty(&xhci->list)) {
-			spin_unlock_irqrestore(&xhci_list_lock, flags);
-			if (have_mutex)
-				mutex_unlock(&xhci->mutex);
+		if (!still_on_list) {
 			usb_put_hcd(xhci_to_hcd(xhci));
 			continue;
 		}
-		spin_unlock_irqrestore(&xhci_list_lock, flags);
+
+		/*
+		 * Try to grab mutex AFTER verifying the controller is still valid.
+		 * Use trylock to avoid blocking - if we can't get it immediately,
+		 * we can still clean up commands with just the spinlock.
+		 *
+		 * Lock ordering is preserved by NOT holding list_lock while
+		 * acquiring mutex.
+		 */
+		have_mutex = mutex_trylock(&xhci->mutex);
 
 		/* Keep IRQs disabled while holding xhci->lock to avoid IRQ deadlock */
 		spin_lock_irqsave(&xhci->lock, flags);
-
-		/*
-		 * Close the "shop": prevent any NEW commands from being queued.
-		 * XHCI_STATE_HALTED is checked at the BEGINNING of queue_command()
-		 * and causes all new submissions to return -ESHUTDOWN immediately.
-		 */
-		xhci->xhc_state |= XHCI_STATE_HALTED;
 
 		/*
 		 * Complete all EXISTING pending commands to wake up waiting threads.
 		 * No need to actually halt the controller - we just need
 		 * to break the deadlock so shutdown can proceed.
 		 *
+		 * DO NOT set XHCI_STATE_HALTED! That would cause xhci_irq()
+		 * to DROP ALL INTERRUPTS, leading to SCSI sync cache timeouts
+		 * and retry storms, which then cause RCU stalls.
+		 * Interrupts must remain working for SCSI sync to complete!
+		 *
 		 * Protected by xhci->lock (optionally also by mutex if we got it).
 		 * Consistent with xhci_hc_died() which also only uses the spinlock.
+		 * The key difference: xhci_hc_died() sets XHCI_STATE_DYING to kill
+		 * URBs, but we don't set XHCI_STATE_HALTED because that would also
+		 * kill all interrupts, breaking SCSI cache sync.
 		 */
 		xhci_cleanup_command_queue(xhci);
 
@@ -160,19 +173,27 @@ static int xhci_reboot_notify(struct notifier_block *nb,
 		usb_put_hcd(xhci_to_hcd(xhci));
 	}
 
-	/*
-	 * Give other CPUs time to schedule the threads we just woke up.
-	 * Without this delay, stop_other_cpus() might stop the other CPUs
-	 * before kworkers have a chance to run and release their mutexes.
-	 */
-	msleep(3);
+/*
+ * Give other CPUs time to schedule the threads we just woke up.
+ * Without this delay, stop_other_cpus() might stop the other CPUs
+ * before kworkers have a chance to run and release their mutexes.
+ */
+	msleep(20);
 	return NOTIFY_OK;
 }
 
 
 static struct notifier_block xhci_reboot_nb = {
 	.notifier_call = xhci_reboot_notify,
-	.priority = INT_MAX,	/* Run early, before device shutdown */
+	/*
+	 * Run FIRST (highest priority) to break deadlocks AS SOON AS POSSIBLE.
+	 * Delay = 0 gives the minimal window for new deadlocks to form.
+	 *
+	 * We do NOT set XHCI_STATE_HALTED because that would cause xhci_irq()
+	 * to drop all interrupts, leading to SCSI sync cache timeouts and RCU stalls.
+	 * Interrupts must remain working for the rest of shutdown.
+	 */
+	.priority = INT_MAX,
 };
 
 static bool td_on_ring(struct xhci_td *td, struct xhci_ring *ring)
