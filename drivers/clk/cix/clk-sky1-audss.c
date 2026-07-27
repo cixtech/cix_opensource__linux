@@ -737,7 +737,7 @@ static int sky1_audss_clk_gate_enable(struct clk_hw *hw)
 
 	spin_lock_irqsave(&sky1_gate->dev->power.lock, flags);
 
-	if (!pm_runtime_active(sky1_gate->dev)) {
+	if (pm_runtime_status_suspended(sky1_gate->dev)) {
 		/* Should not happen theoretically, just add a check to
 		 * avoid access harware exceptionally.
 		 */
@@ -765,7 +765,7 @@ static void sky1_audss_clk_gate_disable(struct clk_hw *hw)
 
 	spin_lock_irqsave(&sky1_gate->dev->power.lock, flags);
 
-	if (!pm_runtime_active(sky1_gate->dev)) {
+	if (pm_runtime_status_suspended(sky1_gate->dev)) {
 		/* Should not happen theoretically, just add a check to
 		 * avoid access harware exceptionally.
 		 */
