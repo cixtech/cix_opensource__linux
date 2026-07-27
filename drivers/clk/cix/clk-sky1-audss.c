@@ -739,7 +739,7 @@ static int sky1_audss_clk_gate_enable(struct clk_hw *hw)
 
 	if (pm_runtime_status_suspended(sky1_gate->dev)) {
 		/* Should not happen theoretically, just add a check to
-		 * avoid access harware exceptionally.
+		 * avoid access harware exceptionally, worry about alsa dmac workaround.
 		 */
 		dev_err(sky1_gate->dev, "enable clock when audss clock controller in suspended\n");
 		return -EPERM;
@@ -767,7 +767,7 @@ static void sky1_audss_clk_gate_disable(struct clk_hw *hw)
 
 	if (pm_runtime_status_suspended(sky1_gate->dev)) {
 		/* Should not happen theoretically, just add a check to
-		 * avoid access harware exceptionally.
+		 * avoid access harware exceptionally, worry about alsa dmac workaround.
 		 */
 		dev_err(sky1_gate->dev, "disable clock when audss clock controller in suspended\n");
 		return;
