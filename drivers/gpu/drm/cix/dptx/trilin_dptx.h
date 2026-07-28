@@ -454,6 +454,7 @@ struct trilin_dp {
 	u32 gop_plug_notify;
 	struct delayed_work hpd_event_work;
 	struct delayed_work hpd_irq_work;
+	struct delayed_work sw_hpd_irq_work;
 	enum drm_connector_status status;
 	enum drm_connector_status force_hpd;
 	bool enabled;

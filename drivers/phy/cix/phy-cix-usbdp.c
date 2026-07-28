@@ -842,6 +842,13 @@ static void usbdp_set_dpphy_mode(struct cix_udphy *udphy)
 static void usbdp_set_dpphy_status(struct cix_udphy *udphy, enum phy_status status)
 {
 	if (NULL != udphy->dp_phy) {
+		/*
+		 * IRQ_HPD is a pulse in PD Attention. Keep it latched across
+		 * status updates while HPD stays high until DP clears it.
+		 */
+		if (status & DP_STATUS_HPD_STATE)
+			status |= udphy->dp_phy->attrs.status & DP_STATUS_IRQ_HPD;
+
 		udphy->dp_phy->attrs.status = status;
 		dev_info(udphy->dev, "set dp phy status: %d\n", udphy->dp_phy->attrs.status);
 	}

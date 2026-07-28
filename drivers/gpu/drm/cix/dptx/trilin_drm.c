@@ -258,11 +258,18 @@ static void trilin_dp_oob_hotplug_event(struct drm_connector *connector, enum dr
 		return;
 	}
 
-	if(dp->force_hpd == hpd_state)
-		return;
-	dp->force_hpd = hpd_state;
-	DP_INFO("drm_connector_status: %d ", hpd_state);
-	schedule_delayed_work(&dp->hpd_event_work, 0);
+	if (dp->force_hpd != hpd_state) {
+		dp->force_hpd = hpd_state;
+		DP_INFO("drm_connector_status: %d ", hpd_state);
+		schedule_delayed_work(&dp->hpd_event_work, 0);
+	}
+
+	/*
+	 * oob runs before mux_set; defer one jiffy so phy status is latched.
+	 * Only Type-C displayport connectors use this path.
+	 */
+	if (hpd_state == connector_status_connected)
+		schedule_delayed_work(&dp->sw_hpd_irq_work, 1);
 }
 
 int trilin_connector_update_modes(struct drm_connector *connector,

@@ -42,6 +42,7 @@
 #include <linux/reset.h>
 #include <linux/kernel.h>
 #include <linux/clk-provider.h>
+#include <linux/usb/typec_dp.h>
 
 #include "trilin_dptx_reg.h"
 #include "trilin_host_tmr.h"
@@ -2752,6 +2753,8 @@ int trilin_dp_deinit_config(struct trilin_dp *dp)
 	int rc = 0;
 
 	DP_DEBUG("enter\n");
+	/* Cancel producer before consumer so sw work cannot re-queue irq work. */
+	cancel_delayed_work_sync(&dp->sw_hpd_irq_work);
 	cancel_delayed_work_sync(&dp->hpd_irq_work);
 	cancel_delayed_work_sync(&dp->hpd_event_work);
 	disable_irq(dp->irq);
@@ -2784,6 +2787,38 @@ static bool trilin_dp_typec_dp_hpd_status(struct trilin_dp *dp)
 		return false;
 
 	return !!(phy_get_status(phy->base) & PHY_STATUS_HPD_HIGH);
+}
+
+/*
+ * Type-C SW HPD IRQ is latched in phy status (usbdp_set_dpphy_status).
+ * Consume it and reuse the HW HPD IRQ work for link/HDCP/MST.
+ */
+static void trilin_dp_consume_phy_irq_hpd(struct trilin_dp *dp)
+{
+	struct phy *phy = dp->phy.base;
+	enum phy_status status;
+
+	if (IS_ERR_OR_NULL(phy) || (dp->state & DPTX_STATE_SUSPENDED))
+		return;
+
+	status = phy->attrs.status;
+	/* IRQ_HPD is only valid while HPD is high. */
+	if (!(status & DP_STATUS_IRQ_HPD) || !(status & DP_STATUS_HPD_STATE))
+		return;
+
+	/* Clear sticky IRQ bit only; keep HPD_STATE and other status bits. */
+	phy->attrs.status = status & ~DP_STATUS_IRQ_HPD;
+	DP_DEBUG("consume Type-C SW HPD IRQ\n");
+	queue_delayed_work(system_freezable_wq, &dp->hpd_irq_work, 0);
+}
+
+/* Deferred from oob so mux_set can latch IRQ_HPD first. */
+static void trilin_dp_sw_hpd_irq_work_func(struct work_struct *work)
+{
+	struct trilin_dp *dp =
+		container_of(work, struct trilin_dp, sw_hpd_irq_work.work);
+
+	trilin_dp_consume_phy_irq_hpd(dp);
 }
 
 /*
@@ -2960,6 +2995,8 @@ int trilin_dp_pm_prepare(struct trilin_dp *dp)
 	 * cancel_delayed_work_sync() and disable_irq().
 	 */
 	disable_irq(dp->irq);
+	/* Cancel producer before consumer so sw work cannot re-queue irq work. */
+	cancel_delayed_work_sync(&dp->sw_hpd_irq_work);
 	cancel_delayed_work_sync(&dp->hpd_irq_work);
 	cancel_delayed_work_sync(&dp->hpd_event_work);
 	mutex_lock(&dp->session_lock);
@@ -3253,6 +3290,7 @@ int trilin_dp_init_config(struct trilin_dp *dp)
 	/*work queue*/
 	INIT_DELAYED_WORK(&dp->hpd_event_work, trilin_dp_hpd_event_work_func);
 	INIT_DELAYED_WORK(&dp->hpd_irq_work, trilin_dp_hpd_irq_work_func);
+	INIT_DELAYED_WORK(&dp->sw_hpd_irq_work, trilin_dp_sw_hpd_irq_work_func);
 
 	/* config dp state*/
 	mutex_init(&dp->session_lock);
@@ -3304,6 +3342,7 @@ end2:
 	trilin_dp_aux_cleanup(dp);
 end1:
 	dp->state &= ~DPTX_STATE_CONFIGURED;
+	cancel_delayed_work_sync(&dp->sw_hpd_irq_work);
 	cancel_delayed_work_sync(&dp->hpd_irq_work);
 	cancel_delayed_work_sync(&dp->hpd_event_work);
 	return rc;
