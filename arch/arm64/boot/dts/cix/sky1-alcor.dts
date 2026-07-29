@@ -9,6 +9,7 @@
 #include "sky1.dtsi"
 #include "sky1-evb-csidma.dtsi"
 #include <dt-bindings/usb/pd.h>
+#include <dt-bindings/input/linux-event-codes.h>
 
 /delete-node/ &reg_definition;
 / {
@@ -350,6 +351,20 @@
 		enable-active-high;
 		status = "disabled";
 	};
+
+	gpio_keys: gpio-keys {
+		compatible = "gpio-keys";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pinctrl_pwrbtn>;
+
+		power-button {
+			label = "Power Button";
+			gpios = <&s5_gpio1 1 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_POWER>;
+			debounce-interval = <10>;
+			wakeup-source;
+		};
+	};
 };
 
 &fch_gpio0 {
@@ -369,6 +384,10 @@
 	status = "okay";
 };
 
+&s5_gpio1 {
+	status = "okay";
+};
+
 
 &hwclock {
 	status = "okay";
@@ -383,6 +402,12 @@
 		sky1,pins = <
 			CIX_PAD_GPIO014_FUNC_GPIO014  (PULL_UP|DS_LEVEL4) /* GPIO14 hp det */
 			CIX_PAD_GPIO040_FUNC_GPIO040  (PULL_UP|DS_LEVEL4) /* GPIO40 */
+		>;
+	};
+
+	pinctrl_pwrbtn: pinctrl_pwrbtn {
+		sky1,pins = <
+			CIX_PAD_SFI_GPIO1_FUNC_GPIO016 (PULL_UP|DS_LEVEL4) /* GPIO016 power button */
 		>;
 	};
 
