@@ -440,6 +440,7 @@ struct hw_mem_release_cmd {
 #define CAM_HW_BUFFER_RELEASE \
 	_IOWR(CMEM_IOCTL_MAGIC, 5, struct hw_mem_release_cmd)
 #define CMEM_CMA_IMPORT _IOWR(CMEM_IOCTL_MAGIC, 6, struct mem_block)
+#define ARMCB_FLUSH_CMA_CACHE _IOWR(CMEM_IOCTL_MAGIC, 7, struct mem_block)
 
 #define ARMCB_VIDIOC_ISP_DMA_COPY 194
 #define ARMCB_VIDIOC_SYS_BUS_TEST 196

@@ -436,8 +436,14 @@ static int ispmem_cma_mmap(struct file *filp, struct vm_area_struct *vma)
 		return -EINVAL;
 	}
 
-	if (dma_mmap_coherent(cam_mem_info->pddev, vma, cmamem_status.vir_addr,
-				cmamem_status.phy_addr, size)) {
+	/// Force the userspace mapping non-cacheable (write-combine). On this SoC the
+	/// ISP-Mem device is treated as coherent, so dma_mmap_coherent() would map the
+	/// DMA buffer CACHEABLE - the CPU then reads stale cache lines (seen as
+	/// cache-line artifacts when dumping the DAR raw ring). DMA_ATTR_WRITE_COMBINE
+	/// makes dma_pgprot() return pgprot_writecombine regardless of coherency, so
+	/// the CPU always reads fresh DMA data and no flush is needed.
+	if (dma_mmap_attrs(cam_mem_info->pddev, vma, cmamem_status.vir_addr,
+				cmamem_status.phy_addr, size, DMA_ATTR_WRITE_COMBINE)) {
 		LOG(LOG_ERR, "dma mmap failed .");
 		return -EIO;
 	}
@@ -797,6 +803,104 @@ int armcb_isp_power(int enable, unsigned long arg)
 	return 0;
 }
 
+/**
+ * ispmem_flush_cma_buffer - Safe CMA cache sync for CPU read after DMA write.
+ *
+ * Do NOT call dma_sync_single_for_cpu() with a raw phy/dma address under IOMMU:
+ * that path can Oops in dcache_inval_poc (CM permission fault) on large ranges
+ * (e.g. 20 x 1080p RAW16 ~79MB dump). Lookup the allocated CMA block and sync
+ * via sgtable instead; clamp length to the allocated buffer size.
+ */
+static long ispmem_flush_cma_buffer(struct file *file, unsigned long arg)
+{
+	struct mem_block cma_info_temp;
+	struct cmamem_block *memory_block = NULL;
+	struct sg_table sgt0;
+	void *kaddr = NULL;
+	dma_addr_t dma_handle = 0;
+	size_t sync_len = 0;
+	unsigned long block_phy = 0;
+	unsigned int req_len = 0;
+	int ret = 0, idx = 0;
+
+	(void)file;
+
+	memset(&cma_info_temp, 0, sizeof(cma_info_temp));
+	memset(&sgt0, 0, sizeof(sgt0));
+
+	if (copy_from_user(&cma_info_temp, (void __user *)arg,
+			   sizeof(struct mem_block))) {
+		LOG(LOG_ERR, "FLUSH_CMA_CACHE copy_from_user error");
+		return -EFAULT;
+	}
+
+	if (!cma_info_temp.phy_addr || !cma_info_temp.len) {
+		LOG(LOG_ERR, "FLUSH_CMA_CACHE invalid phy=0x%lx len=%u",
+		    cma_info_temp.phy_addr, cma_info_temp.len);
+		return -EINVAL;
+	}
+
+	req_len = cma_info_temp.len;
+
+	mutex_lock(&cma_buf_ctl.m_lock);
+	for (idx = 0; idx < cma_buf_ctl.buf_count; idx++) {
+		if (cma_buf_ctl.bufq[idx] == NULL)
+			continue;
+
+		memory_block = cma_buf_ctl.bufq[idx];
+		/* Exact base match, or phy inside this CMA block. */
+		if (memory_block->phy_addr == cma_info_temp.phy_addr ||
+		    (cma_info_temp.phy_addr >= memory_block->phy_addr &&
+		     cma_info_temp.phy_addr <
+			     (memory_block->phy_addr + memory_block->len))) {
+			break;
+		}
+		memory_block = NULL;
+	}
+
+	if (!memory_block || !memory_block->kernel_addr) {
+		mutex_unlock(&cma_buf_ctl.m_lock);
+		/*
+		 * Not a tracked CMA alloc (or already freed). Do not attempt
+		 * raw dma_sync_single — that is what Oops'd on large dumps.
+		 */
+		LOG(LOG_ERR,
+		    "FLUSH_CMA_CACHE: no CMA block for phy=0x%lx len=%u, skip",
+		    cma_info_temp.phy_addr, req_len);
+		return 0;
+	}
+
+	/* Sync from block base; clamp to allocated size. */
+	block_phy = memory_block->phy_addr;
+	kaddr = memory_block->kernel_addr;
+	sync_len = req_len;
+	if (sync_len > memory_block->len)
+		sync_len = memory_block->len;
+	dma_handle = (dma_addr_t)memory_block->phy_addr;
+	mutex_unlock(&cma_buf_ctl.m_lock);
+
+	ret = dma_get_sgtable_attrs(cmamem_dev.pddev, &sgt0, kaddr, dma_handle,
+				    sync_len, 0);
+	if (ret < 0) {
+		LOG(LOG_ERR, "FLUSH_CMA_CACHE get_sgtable failed ret=%d", ret);
+		return -ENOMEM;
+	}
+
+	if (!sgt0.sgl || sgt0.nents == 0) {
+		LOG(LOG_ERR, "FLUSH_CMA_CACHE invalid sgtable");
+		sg_free_table(&sgt0);
+		return -ENOMEM;
+	}
+
+	dma_sync_sgtable_for_cpu(cmamem_dev.pddev, &sgt0, DMA_FROM_DEVICE);
+	sg_free_table(&sgt0);
+
+	LOG(LOG_DEBUG,
+	    "FLUSH_CMA_CACHE ok phy=0x%lx sync_len=0x%zx (req=%u)",
+	    block_phy, sync_len, req_len);
+	return 0;
+}
+
 static long ispmem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int res = 0;
@@ -846,6 +950,9 @@ static long ispmem_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		res = ispmem_xdma_test((void *)arg);
 		break;
 #endif
+	case ARMCB_FLUSH_CMA_CACHE:
+		res = ispmem_flush_cma_buffer(filp, arg);
+		break;
 	default:
 		LOG(LOG_ERR, "unkonw ioctl 0x%x", arg);
 		res = -EINVAL;
