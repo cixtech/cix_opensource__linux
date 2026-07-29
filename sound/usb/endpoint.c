@@ -465,6 +465,10 @@ int snd_usb_queue_pending_output_urbs(struct snd_usb_endpoint *ep,
 {
 	bool implicit_fb = snd_usb_endpoint_implicit_feedback_sink(ep);
 
+	/* Don't queue URBs if the device is disconnected */
+	if (atomic_read(&ep->chip->shutdown))
+		return -EPIPE;
+
 	while (ep_state_running(ep)) {
 
 		unsigned long flags;
@@ -515,13 +519,23 @@ int snd_usb_queue_pending_output_urbs(struct snd_usb_endpoint *ep,
 		else
 			err = -ENODEV;
 		if (err < 0) {
-			if (!atomic_read(&ep->chip->shutdown)) {
+			/* Don't log error for -ENODEV: it's expected when device
+			 * is being disconnected and the disconnect callback hasn't
+			 * run yet (VDEV_PORT_ERROR already blocked it at xhci layer)
+			 */
+			if (err != -ENODEV && !atomic_read(&ep->chip->shutdown)) {
 				usb_audio_err(ep->chip,
 					      "Unable to submit urb #%d: %d at %s\n",
 					      ctx->index, err, __func__);
-				if (!in_stream_lock)
-					notify_xrun(ep);
 			}
+			/* Always notify xrun except when device is already shutdown.
+			 * Separate xrun notification from logging to ensure PCM stream
+			 * gets proper xrun notification even during disconnect window
+			 * (shutdown flag not set yet but device already disconnected).
+			 */
+			if (!in_stream_lock && !atomic_read(&ep->chip->shutdown))
+				notify_xrun(ep);
+
 			return -EPIPE;
 		}
 
@@ -541,13 +555,14 @@ static void snd_complete_urb(struct urb *urb)
 	struct snd_usb_endpoint *ep = ctx->ep;
 	int err;
 
+	/* Check for disconnect immediately at the beginning of callback */
+	if (unlikely(atomic_read(&ep->chip->shutdown)))
+		goto exit_clear;
+
 	if (unlikely(urb->status == -ENOENT ||		/* unlinked */
 		     urb->status == -ENODEV ||		/* device removed */
 		     urb->status == -ECONNRESET ||	/* unlinked */
 		     urb->status == -ESHUTDOWN))	/* device disabled */
-		goto exit_clear;
-	/* device disconnected */
-	if (unlikely(atomic_read(&ep->chip->shutdown)))
 		goto exit_clear;
 
 	if (unlikely(!ep_state_running(ep)))
@@ -595,10 +610,20 @@ static void snd_complete_urb(struct urb *urb)
 	if (err == 0)
 		return;
 
-	if (!atomic_read(&ep->chip->shutdown)) {
+	/* Don't log error for -ENODEV: it's expected when device
+	 * is being disconnected and the disconnect callback hasn't
+	 * run yet (VDEV_PORT_ERROR already blocked it at xhci layer)
+	 */
+	if (err != -ENODEV && !atomic_read(&ep->chip->shutdown))
 		usb_audio_err(ep->chip, "cannot submit urb (err = %d)\n", err);
+
+	/* Always notify xrun except when device is already shutdown.
+	 * Separate xrun notification from logging to ensure PCM stream
+	 * gets proper xrun notification even during disconnect window
+	 * (shutdown flag not set yet but device already disconnected).
+	 */
+	if (!atomic_read(&ep->chip->shutdown))
 		notify_xrun(ep);
-	}
 
 exit_clear:
 	clear_bit(ctx->index, &ep->active_mask);
@@ -927,6 +952,10 @@ static int endpoint_set_interface(struct snd_usb_audio *chip,
 	int altset = set ? ep->altsetting : 0;
 	int err;
 
+	/* Don't attempt to change altsetting if the device is disconnected */
+	if (atomic_read(&chip->shutdown))
+		return -ENODEV;
+
 	if (ep->iface_ref->altset == altset)
 		return 0;
 
@@ -934,9 +963,15 @@ static int endpoint_set_interface(struct snd_usb_audio *chip,
 		      ep->iface, altset, ep->ep_num);
 	err = usb_set_interface(chip->dev, ep->iface, altset);
 	if (err < 0) {
-		usb_audio_err_ratelimited(
-			chip, "%d:%d: usb_set_interface failed (%d)\n",
-			ep->iface, altset, err);
+		/* Don't log error for -ENODEV: it's expected when device
+		 * is being disconnected. Also suppress logging if shutdown
+		 * flag is already set (to be consistent with other functions).
+		 */
+		if (err != -ENODEV && !atomic_read(&chip->shutdown)) {
+			usb_audio_err_ratelimited(
+				chip, "%d:%d: usb_set_interface failed (%d)\n",
+				ep->iface, altset, err);
+		}
 		return err;
 	}
 
@@ -1626,7 +1661,10 @@ int snd_usb_endpoint_start(struct snd_usb_endpoint *ep)
 		else
 			err = -ENODEV;
 		if (err < 0) {
-			if (!atomic_read(&ep->chip->shutdown))
+			/* Don't log error for -ENODEV: it's expected when device
+			 * is being disconnected
+			 */
+			if (err != -ENODEV && !atomic_read(&ep->chip->shutdown))
 				usb_audio_err(ep->chip,
 					      "cannot submit urb %d, error %d: %s\n",
 					      i, err, usb_error_string(err));
