@@ -2018,11 +2018,30 @@ static void handle_port_status(struct xhci_hcd *xhci,
 		usb_hcd_resume_root_hub(hcd);
 	}
 
-	if (hcd->speed >= HCD_USB3 &&
-	    (portsc & PORT_PLS_MASK) == XDEV_INACTIVE) {
-		slot_id = xhci_find_slot_id_by_port(hcd, xhci, hcd_portnum + 1);
-		if (slot_id && xhci->devs[slot_id])
-			xhci->devs[slot_id]->flags |= VDEV_PORT_ERROR;
+	/*
+	 * Set VDEV_PORT_ERROR for two cases:
+	 * 1. USB3 port error: link state is INACTIVE
+	 * 2. Normal disconnect: CSC set and device no longer connected (all speeds)
+	 *
+	 * We need to iterate over all devices because there may be multiple
+	 * devices under the same root port (e.g., devices connected via a hub).
+	 * All devices under the disconnected root port should have this flag
+	 * set to prevent endless transfer/reset cycles during disconnect.
+	 */
+	if (((hcd->speed >= HCD_USB3) && ((portsc & PORT_PLS_MASK) == XDEV_INACTIVE)) ||
+	    ((portsc & PORT_CSC) && !(portsc & PORT_CONNECT))) {
+		int i;
+		enum usb_device_speed speed;
+
+		for (i = 0; i < MAX_HC_SLOTS; i++) {
+			if (!xhci->devs[i] || !xhci->devs[i]->udev)
+				continue;
+			speed = xhci->devs[i]->udev->speed;
+			if (((speed >= USB_SPEED_SUPER) == (hcd->speed >= HCD_USB3))
+					&& xhci->devs[i]->fake_port == (hcd_portnum + 1)) {
+				xhci->devs[i]->flags |= VDEV_PORT_ERROR;
+			}
+		}
 	}
 
 	if ((portsc & PORT_PLC) && (portsc & PORT_PLS_MASK) == XDEV_RESUME) {
