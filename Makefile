@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
+export TARGET_SOC_PLATFORM := sky1
 VERSION = 6
 PATCHLEVEL = 6
 SUBLEVEL = 89
@@ -553,6 +554,8 @@ LINUXINCLUDE    := \
 		$(if $(building_out_of_srctree),-I$(srctree)/include) \
 		-I$(objtree)/include \
 		$(USERINCLUDE)
+
+LINUXINCLUDE += -I$(srctree)/drivers/soc/cix/ap/platform/$(TARGET_SOC_PLATFORM)
 
 KBUILD_AFLAGS   := -D__ASSEMBLY__ -fno-PIE
 

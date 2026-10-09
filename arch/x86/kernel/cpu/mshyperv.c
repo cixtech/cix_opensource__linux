@@ -114,7 +114,8 @@ static void (*hv_stimer0_handler)(void);
 static void (*hv_kexec_handler)(void);
 static void (*hv_crash_handler)(struct pt_regs *regs);
 
-DEFINE_IDTENTRY_SYSVEC(sysvec_hyperv_callback)
+DEFINE_IDTENTRY_SYSVEC_PIPELINED(HYPERVISOR_CALLBACK_VECTOR,
+				 sysvec_hyperv_callback)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
 
@@ -143,7 +144,8 @@ void hv_remove_vmbus_handler(void)
  * Routines to do per-architecture handling of stimer0
  * interrupts when in Direct Mode
  */
-DEFINE_IDTENTRY_SYSVEC(sysvec_hyperv_stimer0)
+DEFINE_IDTENTRY_SYSVEC_PIPELINED(HYPERV_STIMER0_VECTOR,
+				 sysvec_hyperv_stimer0)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
 
@@ -584,7 +586,7 @@ static void __init ms_hyperv_init_platform(void)
 	x86_platform.apic_post_init = hyperv_init;
 	hyperv_setup_mmu_ops();
 	/* Setup the IDT for hypervisor callback */
-	alloc_intr_gate(HYPERVISOR_CALLBACK_VECTOR, asm_sysvec_hyperv_callback);
+	sysvec_install(HYPERVISOR_CALLBACK_VECTOR, sysvec_hyperv_callback);
 
 	/* Setup the IDT for reenlightenment notifications */
 	if (ms_hyperv.features & HV_ACCESS_REENLIGHTENMENT) {

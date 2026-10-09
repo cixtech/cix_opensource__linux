@@ -19,17 +19,20 @@
 /*
  * Local Management Registers
  */
-#define CDNS_PCIE_LM_BASE	0x00100000
+#define CDNS_PCIE_IP_REG_BANK_BASE		0x1000
+#define CDNS_PCIE_IP_CFG_CTRL_REG_BANK_BASE 	0x4c00
+#define CDNS_PCIE_IP_AXI_SLAVE_BASE		0x9000
+#define CDNS_PCIE_IP_AXI_MASTER_COMMON_BASE	0xb000
 
 /* Vendor ID Register */
-#define CDNS_PCIE_LM_ID		(CDNS_PCIE_LM_BASE + 0x0044)
-#define  CDNS_PCIE_LM_ID_VENDOR_MASK	GENMASK(15, 0)
-#define  CDNS_PCIE_LM_ID_VENDOR_SHIFT	0
-#define  CDNS_PCIE_LM_ID_VENDOR(vid) \
+#define CDNS_PCIE_LM_ID			(CDNS_PCIE_IP_REG_BANK_BASE + 0x1420)
+#define CDNS_PCIE_LM_ID_VENDOR_MASK	GENMASK(15, 0)
+#define CDNS_PCIE_LM_ID_VENDOR_SHIFT	0
+#define CDNS_PCIE_LM_ID_VENDOR(vid) \
 	(((vid) << CDNS_PCIE_LM_ID_VENDOR_SHIFT) & CDNS_PCIE_LM_ID_VENDOR_MASK)
-#define  CDNS_PCIE_LM_ID_SUBSYS_MASK	GENMASK(31, 16)
-#define  CDNS_PCIE_LM_ID_SUBSYS_SHIFT	16
-#define  CDNS_PCIE_LM_ID_SUBSYS(sub) \
+#define CDNS_PCIE_LM_ID_SUBSYS_MASK	GENMASK(31, 16)
+#define CDNS_PCIE_LM_ID_SUBSYS_SHIFT	16
+#define CDNS_PCIE_LM_ID_SUBSYS(sub) \
 	(((sub) << CDNS_PCIE_LM_ID_SUBSYS_SHIFT) & CDNS_PCIE_LM_ID_SUBSYS_MASK)
 
 /* Root Port Requester ID Register */
@@ -48,82 +51,102 @@
 
 /* Endpoint Function f BAR b Configuration Registers */
 #define CDNS_PCIE_LM_EP_FUNC_BAR_CFG(bar, fn) \
-	(((bar) < BAR_4) ? CDNS_PCIE_LM_EP_FUNC_BAR_CFG0(fn) : CDNS_PCIE_LM_EP_FUNC_BAR_CFG1(fn))
+	(((bar) < BAR_3) ? CDNS_PCIE_LM_EP_FUNC_BAR_CFG0(fn) : CDNS_PCIE_LM_EP_FUNC_BAR_CFG1(fn))
+
 #define CDNS_PCIE_LM_EP_FUNC_BAR_CFG0(fn) \
-	(CDNS_PCIE_LM_BASE + 0x0240 + (fn) * 0x0008)
+	(CDNS_PCIE_IP_CFG_CTRL_REG_BANK_BASE)
 #define CDNS_PCIE_LM_EP_FUNC_BAR_CFG1(fn) \
-	(CDNS_PCIE_LM_BASE + 0x0244 + (fn) * 0x0008)
+	(CDNS_PCIE_IP_CFG_CTRL_REG_BANK_BASE + 0x4)
+
 #define CDNS_PCIE_LM_EP_VFUNC_BAR_CFG(bar, fn) \
-	(((bar) < BAR_4) ? CDNS_PCIE_LM_EP_VFUNC_BAR_CFG0(fn) : CDNS_PCIE_LM_EP_VFUNC_BAR_CFG1(fn))
+	(((bar) < BAR_3) ? CDNS_PCIE_LM_EP_VFUNC_BAR_CFG0(fn) : CDNS_PCIE_LM_EP_VFUNC_BAR_CFG1(fn))
 #define CDNS_PCIE_LM_EP_VFUNC_BAR_CFG0(fn) \
-	(CDNS_PCIE_LM_BASE + 0x0280 + (fn) * 0x0008)
+	(CDNS_PCIE_IP_CFG_CTRL_REG_BANK_BASE)
 #define CDNS_PCIE_LM_EP_VFUNC_BAR_CFG1(fn) \
-	(CDNS_PCIE_LM_BASE + 0x0284 + (fn) * 0x0008)
-#define  CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_APERTURE_MASK(b) \
-	(GENMASK(4, 0) << ((b) * 8))
-#define  CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_APERTURE(b, a) \
-	(((a) << ((b) * 8)) & CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_APERTURE_MASK(b))
-#define  CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_CTRL_MASK(b) \
-	(GENMASK(7, 5) << ((b) * 8))
-#define  CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_CTRL(b, c) \
-	(((c) << ((b) * 8 + 5)) & CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_CTRL_MASK(b))
+	(CDNS_PCIE_IP_CFG_CTRL_REG_BANK_BASE + 0x4)
+#define CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_APERTURE_MASK(b) \
+	(GENMASK(9, 4) << ((b) * 10))
+#define CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_APERTURE(b, a) \
+	(((a) << (4 + (b) * 10)) & CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_APERTURE_MASK(b))
+#define CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_CTRL_MASK(b) \
+	(GENMASK(3, 0) << ((b) * 10))
+#define CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_CTRL(b, c) \
+	(((c) << ((b) * 10)) & CDNS_PCIE_LM_EP_FUNC_BAR_CFG_BAR_CTRL_MASK(b))
 
 /* Endpoint Function Configuration Register */
-#define CDNS_PCIE_LM_EP_FUNC_CFG	(CDNS_PCIE_LM_BASE + 0x02c0)
+//#define CDNS_PCIE_LM_EP_FUNC_CFG	(CDNS_PCIE_IP_REG_BANK_BASE + 0x02c0)
 
 /* Root Complex BAR Configuration Register */
-#define CDNS_PCIE_LM_RC_BAR_CFG	(CDNS_PCIE_LM_BASE + 0x0300)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_BAR0_APERTURE_MASK	GENMASK(5, 0)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_BAR0_APERTURE(a) \
-	(((a) << 0) & CDNS_PCIE_LM_RC_BAR_CFG_BAR0_APERTURE_MASK)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_BAR0_CTRL_MASK		GENMASK(8, 6)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_BAR0_CTRL(c) \
-	(((c) << 6) & CDNS_PCIE_LM_RC_BAR_CFG_BAR0_CTRL_MASK)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_BAR1_APERTURE_MASK	GENMASK(13, 9)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_BAR1_APERTURE(a) \
-	(((a) << 9) & CDNS_PCIE_LM_RC_BAR_CFG_BAR1_APERTURE_MASK)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_BAR1_CTRL_MASK		GENMASK(16, 14)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_BAR1_CTRL(c) \
-	(((c) << 14) & CDNS_PCIE_LM_RC_BAR_CFG_BAR1_CTRL_MASK)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_PREFETCH_MEM_ENABLE	BIT(17)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_PREFETCH_MEM_32BITS	0
-#define  CDNS_PCIE_LM_RC_BAR_CFG_PREFETCH_MEM_64BITS	BIT(18)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_IO_ENABLE		BIT(19)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_IO_16BITS		0
-#define  CDNS_PCIE_LM_RC_BAR_CFG_IO_32BITS		BIT(20)
-#define  CDNS_PCIE_LM_RC_BAR_CFG_CHECK_ENABLE		BIT(31)
+#define CDNS_PCIE_LM_RC_BAR_CFG	(CDNS_PCIE_IP_CFG_CTRL_REG_BANK_BASE + 0x14)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR0_APERTURE_MASK	GENMASK(9, 4)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR0_APERTURE(a) \
+	(((a) << 4) & CDNS_PCIE_LM_RC_BAR_CFG_BAR0_APERTURE_MASK)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR0_CTRL_MASK		GENMASK(3, 0)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR0_CTRL(c) \
+	(((c) << 0) & CDNS_PCIE_LM_RC_BAR_CFG_BAR0_CTRL_MASK)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_APERTURE_MASK	GENMASK(19, 14)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_APERTURE(a) \
+	(((a) << 14) & CDNS_PCIE_LM_RC_BAR_CFG_BAR1_APERTURE_MASK)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_CTRL_MASK		GENMASK(13, 10)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_CTRL(c) \
+	(((c) << 10) & CDNS_PCIE_LM_RC_BAR_CFG_BAR1_CTRL_MASK)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR0_ENABLE BIT(0)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR0_IO BIT(1)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR0_MEM (0)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR0_32BITS (0)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR0_PREFETCH_MEM_DISABLE (0)
+
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_ENABLE BIT(10)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_DISABLE (0)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_IO BIT(11)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_MEM (0)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_32BITS (0)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_PREFETCH_MEM_ENABLE BIT(13)
+#define CDNS_PCIE_LM_RC_BAR_CFG_BAR1_PREFETCH_MEM_DISABLE (0)
+
+#define CDNS_PCIE_LM_RC_BAR_CFG_PREFETCH_MEM_ENABLE	BIT(20)
+#define CDNS_PCIE_LM_RC_BAR_CFG_PREFETCH_MEM_32BITS    0
+#define CDNS_PCIE_LM_RC_BAR_CFG_PREFETCH_MEM_64BITS    BIT(21)
+#define CDNS_PCIE_LM_RC_BAR_CFG_IO_ENABLE      BIT(22)
+#define CDNS_PCIE_LM_RC_BAR_CFG_IO_16BITS      0
+#define CDNS_PCIE_LM_RC_BAR_CFG_IO_32BITS      BIT(23)
 
 /* BAR control values applicable to both Endpoint Function and Root Complex */
-#define  CDNS_PCIE_LM_BAR_CFG_CTRL_DISABLED		0x0
-#define  CDNS_PCIE_LM_BAR_CFG_CTRL_IO_32BITS		0x1
-#define  CDNS_PCIE_LM_BAR_CFG_CTRL_MEM_32BITS		0x4
-#define  CDNS_PCIE_LM_BAR_CFG_CTRL_PREFETCH_MEM_32BITS	0x5
-#define  CDNS_PCIE_LM_BAR_CFG_CTRL_MEM_64BITS		0x6
-#define  CDNS_PCIE_LM_BAR_CFG_CTRL_PREFETCH_MEM_64BITS	0x7
+#define CDNS_PCIE_LM_BAR_CFG_CTRL_DISABLED		0x0
+#define CDNS_PCIE_LM_BAR_CFG_CTRL_IO_32BITS		0x3
+#define CDNS_PCIE_LM_BAR_CFG_CTRL_MEM_32BITS		0x1
+#define CDNS_PCIE_LM_BAR_CFG_CTRL_PREFETCH_MEM_32BITS	0x9
+#define CDNS_PCIE_LM_BAR_CFG_CTRL_MEM_64BITS		0x5
+#define CDNS_PCIE_LM_BAR_CFG_CTRL_PREFETCH_MEM_64BITS	0xd
 
-#define LM_RC_BAR_CFG_CTRL_DISABLED(bar)		\
-		(CDNS_PCIE_LM_BAR_CFG_CTRL_DISABLED << (((bar) * 8) + 6))
-#define LM_RC_BAR_CFG_CTRL_IO_32BITS(bar)		\
-		(CDNS_PCIE_LM_BAR_CFG_CTRL_IO_32BITS << (((bar) * 8) + 6))
-#define LM_RC_BAR_CFG_CTRL_MEM_32BITS(bar)		\
-		(CDNS_PCIE_LM_BAR_CFG_CTRL_MEM_32BITS << (((bar) * 8) + 6))
-#define LM_RC_BAR_CFG_CTRL_PREF_MEM_32BITS(bar)	\
-	(CDNS_PCIE_LM_BAR_CFG_CTRL_PREFETCH_MEM_32BITS << (((bar) * 8) + 6))
-#define LM_RC_BAR_CFG_CTRL_MEM_64BITS(bar)		\
-		(CDNS_PCIE_LM_BAR_CFG_CTRL_MEM_64BITS << (((bar) * 8) + 6))
-#define LM_RC_BAR_CFG_CTRL_PREF_MEM_64BITS(bar)	\
-	(CDNS_PCIE_LM_BAR_CFG_CTRL_PREFETCH_MEM_64BITS << (((bar) * 8) + 6))
-#define LM_RC_BAR_CFG_APERTURE(bar, aperture)		\
-					(((aperture) - 2) << ((bar) * 8))
+#define LM_RC_BAR_CFG_CTRL_DISABLED(bar)        \
+	(CDNS_PCIE_LM_BAR_CFG_CTRL_DISABLED << ((bar) * 10))
+#define LM_RC_BAR_CFG_CTRL_IO_32BITS(bar)       \
+	(CDNS_PCIE_LM_BAR_CFG_CTRL_IO_32BITS << ((bar) * 10))
+#define LM_RC_BAR_CFG_CTRL_MEM_32BITS(bar)      \
+	(CDNS_PCIE_LM_BAR_CFG_CTRL_MEM_32BITS << ((bar) * 10))
+#define LM_RC_BAR_CFG_CTRL_PREF_MEM_32BITS(bar) \
+	(CDNS_PCIE_LM_BAR_CFG_CTRL_PREFETCH_MEM_32BITS << ((bar) * 10))
+#define LM_RC_BAR_CFG_CTRL_MEM_64BITS(bar)      \
+	(CDNS_PCIE_LM_BAR_CFG_CTRL_MEM_64BITS << ((bar) * 10))
+#define LM_RC_BAR_CFG_CTRL_PREF_MEM_64BITS(bar) \
+	(CDNS_PCIE_LM_BAR_CFG_CTRL_PREFETCH_MEM_64BITS << ((bar) * 10))
+
+#define LM_RC_BAR_CFG_APERTURE(bar, aperture)	\
+	(((aperture) - 7) << ((bar) * 10))
+#define CDNS_PCIE_LM_RC_CFG_BAR_APERTURE_MASK(b) \
+	(GENMASK(9, 4) << ((b) * 10))
+
+
 
 /* PTM Control Register */
-#define CDNS_PCIE_LM_PTM_CTRL 	(CDNS_PCIE_LM_BASE + 0x0da8)
-#define CDNS_PCIE_LM_TPM_CTRL_PTMRSEN 	BIT(17)
+#define CDNS_PCIE_LM_PTM_CTRL		(CDNS_PCIE_IP_REG_BANK_BASE + 0x520)
+#define CDNS_PCIE_LM_TPM_CTRL_PTMRSEN	BIT(17)
 
 /*
  * Endpoint Function Registers (PCI configuration space for endpoint functions)
  */
-#define CDNS_PCIE_EP_FUNC_BASE(fn)	(((fn) << 12) & GENMASK(19, 12))
+#define CDNS_PCIE_EP_FUNC_BASE(fn)		(((fn) << 12) & GENMASK(19, 12))
 
 #define CDNS_PCIE_EP_FUNC_MSI_CAP_OFFSET	0x90
 #define CDNS_PCIE_EP_FUNC_MSIX_CAP_OFFSET	0xb0
@@ -133,84 +156,94 @@
 /*
  * Root Port Registers (PCI configuration space for the root port function)
  */
-#define CDNS_PCIE_RP_BASE	0x00200000
+#define CDNS_PCIE_RP_BASE	0x0
 #define CDNS_PCIE_RP_CAP_OFFSET 0xc0
 
 /*
  * Address Translation Registers
  */
-#define CDNS_PCIE_AT_BASE	0x00400000
+#define CDNS_PCIE_AXI_SLAVE_OFFSET	0x9000
+#define CDNS_PCIE_AXI_MASTER_OFFSET	0xb000
 
 /* Region r Outbound AXI to PCIe Address Translation Register 0 */
 #define CDNS_PCIE_AT_OB_REGION_PCI_ADDR0(r) \
-	(CDNS_PCIE_AT_BASE + 0x0000 + ((r) & 0x1f) * 0x0020)
-#define  CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_NBITS_MASK	GENMASK(5, 0)
-#define  CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_NBITS(nbits) \
+	(CDNS_PCIE_AXI_SLAVE_OFFSET + 0x1010 + ((r) & 0x1f) * 0x0080)
+#define CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_NBITS_MASK	GENMASK(5, 0)
+#define CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_NBITS(nbits) \
 	(((nbits) - 1) & CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_NBITS_MASK)
-#define  CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_DEVFN_MASK	GENMASK(19, 12)
-#define  CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_DEVFN(devfn) \
-	(((devfn) << 12) & CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_DEVFN_MASK)
-#define  CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_BUS_MASK	GENMASK(27, 20)
-#define  CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_BUS(bus) \
-	(((bus) << 20) & CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_BUS_MASK)
+#define CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_DEVFN_MASK	GENMASK(23, 16)
+#define CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_DEVFN(devfn) \
+	(((devfn) << 16) & CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_DEVFN_MASK)
+#define CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_BUS_MASK	GENMASK(31, 24)
+#define CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_BUS(bus) \
+	(((bus) << 24) & CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_BUS_MASK)
 
 /* Region r Outbound AXI to PCIe Address Translation Register 1 */
 #define CDNS_PCIE_AT_OB_REGION_PCI_ADDR1(r) \
-	(CDNS_PCIE_AT_BASE + 0x0004 + ((r) & 0x1f) * 0x0020)
+	(CDNS_PCIE_AXI_SLAVE_OFFSET + 0x1014 + ((r) & 0x1f) * 0x0080)
 
 /* Region r Outbound PCIe Descriptor Register 0 */
 #define CDNS_PCIE_AT_OB_REGION_DESC0(r) \
-	(CDNS_PCIE_AT_BASE + 0x0008 + ((r) & 0x1f) * 0x0020)
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_MASK		GENMASK(3, 0)
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_MEM		0x2
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_IO		0x6
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_CONF_TYPE0	0xa
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_CONF_TYPE1	0xb
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_NORMAL_MSG	0xc
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_VENDOR_MSG	0xd
-/* Bit 23 MUST be set in RC mode. */
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_HARDCODED_RID	BIT(23)
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN_MASK	GENMASK(31, 24)
-#define  CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN(devfn) \
-	(((devfn) << 24) & CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN_MASK)
+	(CDNS_PCIE_AXI_SLAVE_OFFSET + 0x1008 + ((r) & 0x1f) * 0x0080)
+#define CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_MASK		GENMASK(28, 24)
+#define CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_MEM		\
+	((0x0 << 24) & CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_MASK)
+#define CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_IO		\
+	((0x2 << 24) & CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_MASK)
+#define CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_CONF_TYPE0	\
+	((0x4 << 24) & CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_MASK)
+#define CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_CONF_TYPE1	\
+	((0x5 << 24) & CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_MASK)
+#define CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_NORMAL_MSG	\
+	((0x10 << 24) & CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_MASK)
 
 /* Region r Outbound PCIe Descriptor Register 1 */
 #define CDNS_PCIE_AT_OB_REGION_DESC1(r)	\
-	(CDNS_PCIE_AT_BASE + 0x000c + ((r) & 0x1f) * 0x0020)
-#define  CDNS_PCIE_AT_OB_REGION_DESC1_BUS_MASK	GENMASK(7, 0)
-#define  CDNS_PCIE_AT_OB_REGION_DESC1_BUS(bus) \
-	((bus) & CDNS_PCIE_AT_OB_REGION_DESC1_BUS_MASK)
+	(CDNS_PCIE_AXI_SLAVE_OFFSET + 0x100c + ((r) & 0x1f) * 0x0080)
+#define CDNS_PCIE_AT_OB_REGION_DESC1_BUS_MASK	GENMASK(31, 24)
+#define CDNS_PCIE_AT_OB_REGION_DESC1_BUS(bus) \
+	(((bus) << 24) & CDNS_PCIE_AT_OB_REGION_DESC1_BUS_MASK)
+#define CDNS_PCIE_AT_OB_REGION_DESC1_DEVFN_MASK    GENMASK(23, 16)
+#define CDNS_PCIE_AT_OB_REGION_DESC1_DEVFN(devfn) \
+	(((devfn) << 16) & CDNS_PCIE_AT_OB_REGION_DESC1_DEVFN_MASK)
+
+#define CDNS_PCIE_AT_OB_REGION_CTRL0(r)	\
+	(CDNS_PCIE_AXI_SLAVE_OFFSET + 0x1018 + ((r) & 0x1f) * 0x0080)
+#define CDNS_PCIE_AT_OB_REGION_CTRL0_SUPPLY_BUS BIT(26)
+#define CDNS_PCIE_AT_OB_REGION_CTRL0_SUPPLY_DEV_FN BIT(25)
 
 /* Region r AXI Region Base Address Register 0 */
 #define CDNS_PCIE_AT_OB_REGION_CPU_ADDR0(r) \
-	(CDNS_PCIE_AT_BASE + 0x0018 + ((r) & 0x1f) * 0x0020)
-#define  CDNS_PCIE_AT_OB_REGION_CPU_ADDR0_NBITS_MASK	GENMASK(5, 0)
-#define  CDNS_PCIE_AT_OB_REGION_CPU_ADDR0_NBITS(nbits) \
+	(CDNS_PCIE_AXI_SLAVE_OFFSET + 0x1000 + ((r) & 0x1f) * 0x0080)
+#define CDNS_PCIE_AT_OB_REGION_CPU_ADDR0_NBITS_MASK	GENMASK(5, 0)
+#define CDNS_PCIE_AT_OB_REGION_CPU_ADDR0_NBITS(nbits) \
 	(((nbits) - 1) & CDNS_PCIE_AT_OB_REGION_CPU_ADDR0_NBITS_MASK)
 
 /* Region r AXI Region Base Address Register 1 */
 #define CDNS_PCIE_AT_OB_REGION_CPU_ADDR1(r) \
-	(CDNS_PCIE_AT_BASE + 0x001c + ((r) & 0x1f) * 0x0020)
+	(CDNS_PCIE_AXI_SLAVE_OFFSET + 0x1004 + ((r) & 0x1f) * 0x0080)
 
 /* Root Port BAR Inbound PCIe to AXI Address Translation Register */
 #define CDNS_PCIE_AT_IB_RP_BAR_ADDR0(bar) \
-	(CDNS_PCIE_AT_BASE + 0x0800 + (bar) * 0x0008)
-#define  CDNS_PCIE_AT_IB_RP_BAR_ADDR0_NBITS_MASK	GENMASK(5, 0)
-#define  CDNS_PCIE_AT_IB_RP_BAR_ADDR0_NBITS(nbits) \
+	(CDNS_PCIE_AXI_MASTER_OFFSET + 0x0 + (bar) * 0x0008)
+#define CDNS_PCIE_AT_IB_RP_BAR_ADDR0_NBITS_MASK	GENMASK(5, 0)
+#define CDNS_PCIE_AT_IB_RP_BAR_ADDR0_NBITS(nbits) \
 	(((nbits) - 1) & CDNS_PCIE_AT_IB_RP_BAR_ADDR0_NBITS_MASK)
 #define CDNS_PCIE_AT_IB_RP_BAR_ADDR1(bar) \
-	(CDNS_PCIE_AT_BASE + 0x0804 + (bar) * 0x0008)
+	(CDNS_PCIE_AXI_MASTER_OFFSET + 0x4 + (bar) * 0x0008)
 
 /* AXI link down register */
-#define CDNS_PCIE_AT_LINKDOWN (CDNS_PCIE_AT_BASE + 0x0824)
+#define CDNS_PCIE_AT_LINKDOWN (CDNS_PCIE_AXI_SLAVE_OFFSET + 0x0004)
 
-/* LTSSM Capabilities register */
-#define CDNS_PCIE_LTSSM_CONTROL_CAP             (CDNS_PCIE_LM_BASE + 0x0054)
-#define  CDNS_PCIE_DETECT_QUIET_MIN_DELAY_MASK  GENMASK(2, 1)
-#define  CDNS_PCIE_DETECT_QUIET_MIN_DELAY_SHIFT 1
-#define  CDNS_PCIE_DETECT_QUIET_MIN_DELAY(delay) \
-	 (((delay) << CDNS_PCIE_DETECT_QUIET_MIN_DELAY_SHIFT) & \
-	 CDNS_PCIE_DETECT_QUIET_MIN_DELAY_MASK)
+/* Physical Layer Configuration Register 0
+ * This register contains the parameters required for functional setup of Physical Layer.
+ */
+#define CDNS_PCIE_PHY_LAYER_CFG0             (CDNS_PCIE_IP_REG_BANK_BASE + 0x0400)
+#define CDNS_PCIE_DETECT_QUIET_MIN_DELAY_MASK  GENMASK(26, 24)
+#define CDNS_PCIE_DETECT_QUIET_MIN_DELAY_SHIFT 24
+#define CDNS_PCIE_DETECT_QUIET_MIN_DELAY(delay) \
+	(((delay) << CDNS_PCIE_DETECT_QUIET_MIN_DELAY_SHIFT) & \
+	CDNS_PCIE_DETECT_QUIET_MIN_DELAY_MASK)
 
 enum cdns_pcie_rp_bar {
 	RP_BAR_UNDEFINED = -1,
@@ -220,7 +253,7 @@ enum cdns_pcie_rp_bar {
 };
 
 #define CDNS_PCIE_RP_MAX_IB	0x3
-#define CDNS_PCIE_MAX_OB	32
+#define CDNS_PCIE_MAX_OB	15
 
 struct cdns_pcie_rp_ib_bar {
 	u64 size;
@@ -229,9 +262,9 @@ struct cdns_pcie_rp_ib_bar {
 
 /* Endpoint Function BAR Inbound PCIe to AXI Address Translation Register */
 #define CDNS_PCIE_AT_IB_EP_FUNC_BAR_ADDR0(fn, bar) \
-	(CDNS_PCIE_AT_BASE + 0x0840 + (fn) * 0x0040 + (bar) * 0x0008)
+	(CDNS_PCIE_IP_AXI_MASTER_COMMON_BASE + 0x0 + (fn) * 0x0040 + (bar) * 0x0008)
 #define CDNS_PCIE_AT_IB_EP_FUNC_BAR_ADDR1(fn, bar) \
-	(CDNS_PCIE_AT_BASE + 0x0844 + (fn) * 0x0040 + (bar) * 0x0008)
+	(CDNS_PCIE_IP_AXI_MASTER_COMMON_BASE + 0x4 + (fn) * 0x0040 + (bar) * 0x0008)
 
 /* Normal/Vendor specific message access: offset inside some outbound region */
 #define CDNS_PCIE_NORMAL_MSG_ROUTING_MASK	GENMASK(7, 5)
@@ -245,6 +278,7 @@ struct cdns_pcie_rp_ib_bar {
 struct cdns_pcie;
 
 enum cdns_pcie_msg_code {
+	MSG_CODE_PME_TURN_OFF	= 0x15,
 	MSG_CODE_ASSERT_INTA	= 0x20,
 	MSG_CODE_ASSERT_INTB	= 0x21,
 	MSG_CODE_ASSERT_INTC	= 0x22,
@@ -275,6 +309,15 @@ enum cdns_pcie_msg_routing {
 	MSG_ROUTING_GATHER,
 };
 
+struct cdns_pcie_msg {
+	enum cdns_pcie_msg_code msg_code;
+	enum cdns_pcie_msg_routing msg_routing;
+	bool withdata;
+	u32 data_l;
+	u32 data_h;
+	bool vdm;
+};
+
 struct cdns_pcie_ops {
 	int	(*start_link)(struct cdns_pcie *pcie);
 	void	(*stop_link)(struct cdns_pcie *pcie);
@@ -297,12 +340,14 @@ struct cdns_pcie_ops {
 struct cdns_pcie {
 	void __iomem		*reg_base;
 	struct resource		*mem_res;
+	struct resource		*msg_res;
 	struct device		*dev;
 	bool			is_rc;
 	int			phy_count;
 	struct phy		**phy;
 	struct device_link	**link;
 	const struct cdns_pcie_ops *ops;
+	bool			plat_emu;
 };
 
 /**
@@ -319,6 +364,8 @@ struct cdns_pcie {
  *                available
  * @quirk_retrain_flag: Retrain link as quirk for PCIe Gen2
  * @quirk_detect_quiet_flag: LTSSM Detect Quiet min delay set as quirk
+ * @ecam_support_flag: whether the controller supports ecam
+ * @id: the alias id for controller
  */
 struct cdns_pcie_rc {
 	struct cdns_pcie	pcie;
@@ -329,6 +376,8 @@ struct cdns_pcie_rc {
 	bool			avail_ib_bar[CDNS_PCIE_RP_MAX_IB];
 	unsigned int		quirk_retrain_flag:1;
 	unsigned int		quirk_detect_quiet_flag:1;
+	unsigned int		ecam_support_flag:1;
+	u8			id;
 };
 
 /**
@@ -551,6 +600,9 @@ static inline int cdns_pcie_ep_setup(struct cdns_pcie_ep *ep)
 	return 0;
 }
 #endif
+
+u8 cdns_pcie_find_capability(void __iomem *addr, u8 cap);
+u16 cdns_pcie_find_ext_capability(void __iomem *addr, u8 cap);
 
 void cdns_pcie_detect_quiet_min_delay_set(struct cdns_pcie *pcie);
 

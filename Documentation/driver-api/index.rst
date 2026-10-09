@@ -66,6 +66,7 @@ available subsections can be seen below.
    uio-howto
    firmware/index
    pin-control
+   pin-control-acpi
    gpio/index
    md/index
    media/index

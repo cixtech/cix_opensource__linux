@@ -5,6 +5,7 @@
  * Copyright (C) 2009 - 2014 Xilinx, Inc.
  */
 
+#include <linux/acpi.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/i2c.h>
@@ -17,6 +18,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/reset.h>
+#include <linux/gpio/consumer.h>
 
 /* Register offsets for the I2C device. */
 #define CDNS_I2C_CR_OFFSET		0x00 /* Control Register, RW */
@@ -29,6 +31,7 @@
 #define CDNS_I2C_IMR_OFFSET		0x20 /* IRQ Mask Register, RO */
 #define CDNS_I2C_IER_OFFSET		0x24 /* IRQ Enable Register, WO */
 #define CDNS_I2C_IDR_OFFSET		0x28 /* IRQ Disable Register, WO */
+#define CDNS_I2C_GFCR_OFFSET		0x2C /* glitch filter Register, RW */
 
 /* Control Register Bit mask definitions */
 #define CDNS_I2C_CR_HOLD		BIT(4) /* Hold Bus bit */
@@ -111,7 +114,7 @@
 					 CDNS_I2C_IXR_DATA | \
 					 CDNS_I2C_IXR_COMP)
 
-#define CDNS_I2C_TIMEOUT		msecs_to_jiffies(1000)
+#define CDNS_I2C_TIMEOUT		msecs_to_jiffies(3000)
 /* timeout for pm runtime autosuspend */
 #define CNDS_I2C_PM_TIMEOUT		1000	/* ms */
 
@@ -130,6 +133,16 @@
 #define CDNS_I2C_BROKEN_HOLD_BIT	BIT(0)
 #define CDNS_I2C_POLL_US	100000
 #define CDNS_I2C_TIMEOUT_US	500000
+
+/* Notice that the false START condition usually appears at the output of glitch filter.
+ * The problems caused by slope shift must be properly handled by I2C core. The operation
+ * of GF for clock frequency lower than 60 MHz can lead in some cases toundesired behaviour.
+ * For that reason for Pclk frequency lower than 60MHz the glitch filter should be disabled (GFCR = 0).
+ */
+#define CDNS_I2C_GFCR_PCLK_LIMIT	60 * 1000000 /* HZ */
+#define CDNS_I2C_GFCR_CLEAR	0x0
+#define CDNS_I2C_GFCR_LEN_LIMIT	50 * 1000 /* ps */
+#define CDNS_I2C_GFCR_PS_PRE_S 1000000000000 /* Total picoseconds per second */
 
 #define cdns_i2c_readreg(offset)       readl_relaxed(id->membase + offset)
 #define cdns_i2c_writereg(val, offset) writel_relaxed(val, id->membase + offset)
@@ -210,6 +223,7 @@ struct cdns_i2c {
 	struct reset_control *reset;
 	u32 quirks;
 	u32 ctrl_reg;
+	u32 gf_reg;
 	struct i2c_bus_recovery_info rinfo;
 #if IS_ENABLED(CONFIG_I2C_SLAVE)
 	u16 ctrl_reg_diva_divb;
@@ -250,6 +264,8 @@ static inline bool cdns_is_holdquirk(struct cdns_i2c *id, bool hold_wrkaround)
 #if IS_ENABLED(CONFIG_I2C_SLAVE)
 static void cdns_i2c_set_mode(enum cdns_i2c_mode mode, struct cdns_i2c *id)
 {
+	u32 ctrl_reg;
+
 	/* Disable all interrupts */
 	cdns_i2c_writereg(CDNS_I2C_IXR_ALL_INTR_MASK, CDNS_I2C_IDR_OFFSET);
 
@@ -283,6 +299,11 @@ static void cdns_i2c_set_mode(enum cdns_i2c_mode mode, struct cdns_i2c *id)
 		/* Setting slave address */
 		cdns_i2c_writereg(id->slave->addr & CDNS_I2C_ADDR_MASK,
 				  CDNS_I2C_ADDR_OFFSET);
+
+		/* setting hold bit */
+		ctrl_reg = cdns_i2c_readreg(CDNS_I2C_CR_OFFSET);
+		ctrl_reg |= CDNS_I2C_CR_HOLD;
+		cdns_i2c_writereg(ctrl_reg, CDNS_I2C_CR_OFFSET);
 
 		/* Enable slave send/receive interrupts */
 		cdns_i2c_writereg(CDNS_I2C_IXR_SLAVE_INTR_MASK,
@@ -341,6 +362,7 @@ static irqreturn_t cdns_i2c_slave_isr(void *ptr)
 {
 	struct cdns_i2c *id = ptr;
 	unsigned int isr_status, i2c_status;
+	unsigned int ctrl_reg;
 
 	/* Fetch the interrupt status */
 	isr_status = cdns_i2c_readreg(CDNS_I2C_ISR_OFFSET);
@@ -379,7 +401,9 @@ static irqreturn_t cdns_i2c_slave_isr(void *ptr)
 			  CDNS_I2C_IXR_RX_UNF | CDNS_I2C_IXR_TX_OVF)) {
 		id->slave_state = CDNS_I2C_SLAVE_STATE_IDLE;
 		i2c_slave_event(id->slave, I2C_SLAVE_STOP, NULL);
-		cdns_i2c_writereg(CDNS_I2C_CR_CLR_FIFO, CDNS_I2C_CR_OFFSET);
+		/* clear the FIFO */
+		ctrl_reg = cdns_i2c_readreg(CDNS_I2C_CR_OFFSET);
+		cdns_i2c_writereg(ctrl_reg | CDNS_I2C_CR_CLR_FIFO, CDNS_I2C_CR_OFFSET);
 	}
 
 	return IRQ_HANDLED;
@@ -792,7 +816,7 @@ static int cdns_i2c_process_msg(struct cdns_i2c *id, struct i2c_msg *msg,
 		cdns_i2c_master_reset(adap);
 		dev_err(id->adap.dev.parent,
 				"timeout waiting on completion\n");
-		return -ETIMEDOUT;
+		return -EAGAIN;
 	}
 
 	cdns_i2c_writereg(CDNS_I2C_IXR_ALL_INTR_MASK,
@@ -905,7 +929,10 @@ static int cdns_i2c_master_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs,
 			cdns_i2c_master_reset(adap);
 
 			if (id->err_status & CDNS_I2C_IXR_NACK) {
-				ret = -ENXIO;
+				if (msgs->flags & I2C_M_RD)
+					ret = -EAGAIN;
+				else
+					ret = -ENXIO;
 				goto out;
 			}
 			ret = -EIO;
@@ -989,6 +1016,69 @@ static int cdns_unreg_slave(struct i2c_client *slave)
 	return 0;
 }
 #endif
+
+static void cdns_i2c_prepare_recovery(struct i2c_adapter *adapter)
+{
+	struct cdns_i2c *id = container_of(adapter, struct cdns_i2c, adap);
+
+	pinctrl_select_state(id->rinfo.pinctrl, id->rinfo.pins_gpio);
+}
+
+static void cdns_i2c_unprepare_recovery(struct i2c_adapter *adapter)
+{
+	struct cdns_i2c *id = container_of(adapter, struct cdns_i2c, adap);
+
+	pinctrl_select_state(id->rinfo.pinctrl, id->rinfo.pins_default);
+}
+
+/*
+ * We switch SCL and SDA to their GPIO function and do some bitbanging
+ * for bus recovery. These alternative pinmux settings can be
+ * described in the device tree by a separate pinctrl state "gpio". If
+ * this is missing this is not a big problem, the only implication is
+ * that we can't do bus recovery.
+ */
+static int cdns_i2c_init_recovery_info(struct cdns_i2c *id,
+		struct platform_device *pdev)
+{
+	struct i2c_bus_recovery_info *rinfo = &id->rinfo;
+
+	rinfo->pinctrl = devm_pinctrl_get(&pdev->dev);
+	if (IS_ERR(rinfo->pinctrl)) {
+		dev_info(&pdev->dev, "can't get pinctrl, bus recovery not supported\n");
+		return PTR_ERR(id->rinfo.pinctrl);
+	}
+
+	rinfo->pins_default = pinctrl_lookup_state(rinfo->pinctrl,
+			PINCTRL_STATE_DEFAULT);
+	rinfo->pins_gpio = pinctrl_lookup_state(rinfo->pinctrl,
+			"gpio");
+
+	rinfo->sda_gpiod = devm_gpiod_get(&pdev->dev, "sda", GPIOD_IN);
+	rinfo->scl_gpiod = devm_gpiod_get(&pdev->dev, "scl", GPIOD_OUT_HIGH_OPEN_DRAIN);
+
+	if (PTR_ERR(rinfo->sda_gpiod) == -EPROBE_DEFER ||
+	    PTR_ERR(rinfo->scl_gpiod) == -EPROBE_DEFER) {
+	    /* Give it another chance if pinctrl used is not ready yet */
+		return -EPROBE_DEFER;
+	} else if (IS_ERR(rinfo->sda_gpiod) ||
+		   IS_ERR(rinfo->scl_gpiod) ||
+		   IS_ERR(rinfo->pins_default) ||
+		   IS_ERR(rinfo->pins_gpio)) {
+		dev_info(&pdev->dev, "recovery information incomplete\n");
+		return 0;
+	}
+
+	dev_dbg(&pdev->dev, "using scl%s for recovery\n",
+		rinfo->sda_gpiod ? ",sda" : "");
+
+	rinfo->prepare_recovery = cdns_i2c_prepare_recovery;
+	rinfo->unprepare_recovery = cdns_i2c_unprepare_recovery;
+	rinfo->recover_bus = i2c_generic_scl_recovery;
+	id->adap.bus_recovery_info = rinfo;
+
+	return 0;
+}
 
 static const struct i2c_algorithm cdns_i2c_algo = {
 	.master_xfer	= cdns_i2c_master_xfer,
@@ -1090,12 +1180,45 @@ static int cdns_i2c_setclk(unsigned long clk_in, struct cdns_i2c *id)
 	ctrl_reg |= ((div_a << CDNS_I2C_CR_DIVA_SHIFT) |
 			(div_b << CDNS_I2C_CR_DIVB_SHIFT));
 	id->ctrl_reg = ctrl_reg;
-	cdns_i2c_writereg(ctrl_reg, CDNS_I2C_CR_OFFSET);
 #if IS_ENABLED(CONFIG_I2C_SLAVE)
 	id->ctrl_reg_diva_divb = ctrl_reg & (CDNS_I2C_CR_DIVA_MASK |
 				 CDNS_I2C_CR_DIVB_MASK);
 #endif
 	return 0;
+}
+
+static int cdns_i2c_calc_nearest_multiple(int limt, int cycle)
+{
+	int quotient, nearest_multiple;
+
+	if(!cycle)
+		return 0;
+
+	quotient = limt / cycle;
+
+	if (limt - (cycle * quotient) > (cycle * (quotient + 1)) - limt)
+		nearest_multiple = quotient + 1;
+	else
+		nearest_multiple = quotient;
+
+	return nearest_multiple;
+}
+
+static void cdns_i2c_set_glitch_filter(struct cdns_i2c *id)
+{
+	unsigned int cycle = 0;
+	unsigned int cycle_num = 0;
+
+	/* pclk lower than 60MHz the glitch filtershould be disabled */
+	if(id->input_clk < CDNS_I2C_GFCR_PCLK_LIMIT) {
+		id->gf_reg = CDNS_I2C_GFCR_CLEAR;
+		return;
+	}
+
+	cycle = CDNS_I2C_GFCR_PS_PRE_S / id->input_clk;
+	cycle_num = cdns_i2c_calc_nearest_multiple(CDNS_I2C_GFCR_LEN_LIMIT, cycle);
+
+	id->gf_reg = cycle_num;
 }
 
 /**
@@ -1162,7 +1285,7 @@ static int cdns_i2c_clk_notifier_cb(struct notifier_block *nb, unsigned long
 
 /**
  * cdns_i2c_runtime_suspend -  Runtime suspend method for the driver
- * @dev:	Address of the platform_device structure
+ * @dev:	Address of the I2C device structure
  *
  * Put the driver into low power mode.
  *
@@ -1172,7 +1295,7 @@ static int __maybe_unused cdns_i2c_runtime_suspend(struct device *dev)
 {
 	struct cdns_i2c *xi2c = dev_get_drvdata(dev);
 
-	clk_disable(xi2c->clk);
+	clk_disable_unprepare(xi2c->clk);
 
 	return 0;
 }
@@ -1187,6 +1310,7 @@ static int __maybe_unused cdns_i2c_runtime_suspend(struct device *dev)
 static void cdns_i2c_init(struct cdns_i2c *id)
 {
 	cdns_i2c_writereg(id->ctrl_reg, CDNS_I2C_CR_OFFSET);
+	cdns_i2c_writereg(id->gf_reg, CDNS_I2C_GFCR_OFFSET);
 	/*
 	 * Cadence I2C controller has a bug wherein it generates
 	 * invalid read transaction after HW timeout in master receiver mode.
@@ -1199,7 +1323,7 @@ static void cdns_i2c_init(struct cdns_i2c *id)
 
 /**
  * cdns_i2c_runtime_resume - Runtime resume
- * @dev:	Address of the platform_device structure
+ * @dev:	Address of the I2C device structure
  *
  * Runtime resume callback.
  *
@@ -1210,7 +1334,7 @@ static int __maybe_unused cdns_i2c_runtime_resume(struct device *dev)
 	struct cdns_i2c *xi2c = dev_get_drvdata(dev);
 	int ret;
 
-	ret = clk_enable(xi2c->clk);
+	ret = clk_prepare_enable(xi2c->clk);
 	if (ret) {
 		dev_err(dev, "Cannot enable clock.\n");
 		return ret;
@@ -1220,9 +1344,69 @@ static int __maybe_unused cdns_i2c_runtime_resume(struct device *dev)
 	return 0;
 }
 
+ /**
+ * cdns_i2c_suspend - Suspend method for the I2C driver
+ * @dev:	Address of the I2C device structure
+ *
+ * This function disables the I2C controller and
+ * changes the driver state to "suspend"
+ *
+ * Return:	0 on success and error value on error
+ */
+static int __maybe_unused cdns_i2c_suspend(struct device *dev)
+{
+	int ret;
+
+	ret = pinctrl_pm_select_sleep_state(dev);
+	if (ret)
+		dev_err(dev, "%s: failed to set pins.\n",
+			 __func__);
+
+	ret = pm_runtime_force_suspend(dev);
+	if (ret) {
+		dev_err(dev, "Force suspend error.\n");
+		return ret;
+	}
+
+	return 0;
+}
+
+/**
+ * cdns_i2c_resume - Resume method for the I2C driver
+ * @dev:	Address of the I2C device structure
+ *
+ * This function changes the driver state to "ready"
+ *
+ * Return:	0 on success and error value on error
+ */
+static int __maybe_unused cdns_i2c_resume(struct device *dev)
+{
+	struct cdns_i2c *xi2c = dev_get_drvdata(dev);
+	int ret;
+
+	ret = pinctrl_pm_select_default_state(dev);
+	if (ret)
+		dev_err(dev, "%s: failed to set pins.\n",
+			 __func__);
+
+	/* reset */
+	reset_control_assert(xi2c->reset);
+	/* release reset */
+	reset_control_deassert(xi2c->reset);
+
+	ret = pm_runtime_force_resume(dev);
+	if (ret) {
+		dev_err(dev, "Force resume error.\n");
+		return ret;
+	}
+
+	return 0;
+}
+
 static const struct dev_pm_ops cdns_i2c_dev_pm_ops = {
 	SET_RUNTIME_PM_OPS(cdns_i2c_runtime_suspend,
 			   cdns_i2c_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(cdns_i2c_suspend, cdns_i2c_resume)
 };
 
 static const struct cdns_platform_data r1p10_i2c_def = {
@@ -1235,6 +1419,14 @@ static const struct of_device_id cdns_i2c_of_match[] = {
 	{ /* end of table */ }
 };
 MODULE_DEVICE_TABLE(of, cdns_i2c_of_match);
+
+#ifdef CONFIG_ACPI
+static const struct acpi_device_id cdns_i2c_acpi_ids[] = {
+	{"CIXH200B", 0},
+	{ }
+};
+MODULE_DEVICE_TABLE(acpi, cdns_i2c_acpi_ids);
+#endif
 
 /**
  * cdns_i2c_detect_transfer_size - Detect the maximum transfer size supported
@@ -1283,6 +1475,7 @@ static int cdns_i2c_probe(struct platform_device *pdev)
 	struct cdns_i2c *id;
 	int ret, irq;
 	const struct of_device_id *match;
+	u32 acpi_speed;
 
 	id = devm_kzalloc(&pdev->dev, sizeof(*id), GFP_KERNEL);
 	if (!id)
@@ -1297,16 +1490,10 @@ static int cdns_i2c_probe(struct platform_device *pdev)
 		id->quirks = data->quirks;
 	}
 
-	id->rinfo.pinctrl = devm_pinctrl_get(&pdev->dev);
-	if (IS_ERR(id->rinfo.pinctrl)) {
-		int err = PTR_ERR(id->rinfo.pinctrl);
-
-		dev_info(&pdev->dev, "can't get pinctrl, bus recovery not supported\n");
-		if (err != -ENODEV)
-			return err;
-	} else {
-		id->adap.bus_recovery_info = &id->rinfo;
-	}
+	/* Init optional bus recovery function */
+	ret = cdns_i2c_init_recovery_info(id, pdev);
+	if (ret && ret != ENODEV)
+		return ret;
 
 	id->membase = devm_platform_get_and_ioremap_resource(pdev, 0, &r_mem);
 	if (IS_ERR(id->membase))
@@ -1323,6 +1510,8 @@ static int cdns_i2c_probe(struct platform_device *pdev)
 	id->adap.retries = 3;		/* Default retry value. */
 	id->adap.algo_data = id;
 	id->adap.dev.parent = &pdev->dev;
+	ACPI_COMPANION_SET(&id->adap.dev, ACPI_COMPANION(id->adap.dev.parent));
+
 	init_completion(&id->xfer_done);
 	snprintf(id->adap.name, sizeof(id->adap.name),
 		 "Cadence I2C at %08lx", (unsigned long)r_mem->start);
@@ -1332,21 +1521,20 @@ static int cdns_i2c_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, PTR_ERR(id->clk),
 				     "input clock not found.\n");
 
-	id->reset = devm_reset_control_get_optional_shared(&pdev->dev, NULL);
-	if (IS_ERR(id->reset))
-		return dev_err_probe(&pdev->dev, PTR_ERR(id->reset),
-				     "Failed to request reset.\n");
-
 	ret = clk_prepare_enable(id->clk);
 	if (ret)
 		dev_err(&pdev->dev, "Unable to enable clock.\n");
 
-	ret = reset_control_deassert(id->reset);
-	if (ret) {
-		dev_err_probe(&pdev->dev, ret,
-			      "Failed to de-assert reset.\n");
+	id->reset = devm_reset_control_array_get_optional_exclusive(&pdev->dev);
+	if (IS_ERR(id->reset)) {
+		dev_err(&pdev->dev, "[%s:%d]get reset error\n", __func__, __LINE__);
+		ret = PTR_ERR(id->reset);
 		goto err_clk_dis;
 	}
+	/* reset */
+	reset_control_assert(id->reset);
+	/* release reset */
+	reset_control_deassert(id->reset);
 
 	pm_runtime_set_autosuspend_delay(id->dev, CNDS_I2C_PM_TIMEOUT);
 	pm_runtime_use_autosuspend(id->dev);
@@ -1358,9 +1546,12 @@ static int cdns_i2c_probe(struct platform_device *pdev)
 		dev_warn(&pdev->dev, "Unable to register clock notifier.\n");
 	id->input_clk = clk_get_rate(id->clk);
 
-	ret = of_property_read_u32(pdev->dev.of_node, "clock-frequency",
+	ret = device_property_read_u32(&pdev->dev, "clock-frequency",
 			&id->i2c_clk);
-	if (ret || (id->i2c_clk > I2C_MAX_FAST_MODE_FREQ))
+	acpi_speed = i2c_acpi_find_bus_speed(&pdev->dev);
+	if (acpi_speed && acpi_speed < id->i2c_clk)
+		id->i2c_clk = acpi_speed;
+	if (id->i2c_clk > I2C_MAX_FAST_MODE_FREQ)
 		id->i2c_clk = I2C_MAX_STANDARD_MODE_FREQ;
 
 #if IS_ENABLED(CONFIG_I2C_SLAVE)
@@ -1381,6 +1572,7 @@ static int cdns_i2c_probe(struct platform_device *pdev)
 		ret = -EINVAL;
 		goto err_clk_notifier_unregister;
 	}
+	cdns_i2c_set_glitch_filter(id);
 
 	ret = devm_request_irq(&pdev->dev, irq, cdns_i2c_isr, 0,
 				 DRIVER_NAME, id);
@@ -1435,6 +1627,7 @@ static struct platform_driver cdns_i2c_drv = {
 	.driver = {
 		.name  = DRIVER_NAME,
 		.of_match_table = cdns_i2c_of_match,
+		.acpi_match_table = ACPI_PTR(cdns_i2c_acpi_ids),
 		.pm = &cdns_i2c_dev_pm_ops,
 	},
 	.probe  = cdns_i2c_probe,

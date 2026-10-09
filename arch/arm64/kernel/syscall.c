@@ -2,6 +2,7 @@
 
 #include <linux/compiler.h>
 #include <linux/context_tracking.h>
+#include <linux/irqstage.h>
 #include <linux/errno.h>
 #include <linux/nospec.h>
 #include <linux/ptrace.h>
@@ -14,6 +15,9 @@
 #include <asm/syscall.h>
 #include <asm/thread_info.h>
 #include <asm/unistd.h>
+#ifdef CONFIG_PLAT_AP_HOOK
+#include <linux/soc/cix/rdr_platform_ap_hook.h>
+#endif
 
 long compat_arm_syscall(struct pt_regs *regs, int scno);
 long sys_ni_syscall(void);
@@ -76,6 +80,7 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 			   const syscall_fn_t syscall_table[])
 {
 	unsigned long flags = read_thread_flags();
+	int ret;
 
 	regs->orig_x0 = regs->regs[0];
 	regs->syscallno = scno;
@@ -97,6 +102,18 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 	 * So, don't touch regs->pstate & PSR_BTYPE_MASK here.
 	 * (Similarly for HVC and SMC elsewhere.)
 	 */
+
+	if (dovetail_debug()) {
+		WARN_ON_ONCE(hard_irqs_disabled());
+		WARN_ON_ONCE(running_inband() && test_inband_stall());
+	}
+
+	ret = pipeline_syscall(scno, regs);
+	if (ret > 0)
+		return;
+
+	if (ret < 0)
+		goto tail_work;
 
 	if (flags & _TIF_MTE_ASYNC_FAULT) {
 		/*
@@ -131,13 +148,20 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 			goto trace_exit;
 	}
 
+#ifdef CONFIG_PLAT_AP_HOOK
+	syscalls_hook(scno, 0);
+#endif
 	invoke_syscall(regs, scno, sc_nr, syscall_table);
+#ifdef CONFIG_PLAT_AP_HOOK
+	syscalls_hook(scno, 1);
+#endif
 
 	/*
 	 * The tracing status may have changed under our feet, so we have to
 	 * check again. However, if we were tracing entry, then we always trace
 	 * exit regardless, as the old entry assembly did.
 	 */
+tail_work:
 	if (!has_syscall_work(flags) && !IS_ENABLED(CONFIG_DEBUG_RSEQ)) {
 		flags = read_thread_flags();
 		if (!has_syscall_work(flags) && !(flags & _TIF_SINGLESTEP))

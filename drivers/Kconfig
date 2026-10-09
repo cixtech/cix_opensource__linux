@@ -35,6 +35,8 @@ source "drivers/block/Kconfig"
 
 source "drivers/nvme/Kconfig"
 
+source "drivers/evl/Kconfig"
+
 source "drivers/misc/Kconfig"
 
 source "drivers/scsi/Kconfig"
@@ -242,5 +244,7 @@ source "drivers/peci/Kconfig"
 source "drivers/hte/Kconfig"
 
 source "drivers/cdx/Kconfig"
+
+source "drivers/resctrl/Kconfig"
 
 endmenu

@@ -234,6 +234,9 @@ config ARCH_CORRECT_STACKTRACE_ON_KRETPROBE
 config HAVE_FUNCTION_ERROR_INJECTION
 	bool
 
+config HAVE_PERCPU_PREEMPT_COUNT
+	bool
+
 config HAVE_NMI
 	bool
 
@@ -993,7 +996,7 @@ config HAVE_SOFTIRQ_ON_OWN_STACK
 	  separate stack.
 
 config SOFTIRQ_ON_OWN_STACK
-	def_bool HAVE_SOFTIRQ_ON_OWN_STACK && !PREEMPT_RT
+	def_bool HAVE_SOFTIRQ_ON_OWN_STACK && !PREEMPT_RT && !IRQ_PIPELINE
 
 config ALTERNATE_USER_ADDRESS_SPACE
 	bool
@@ -1332,6 +1335,14 @@ config STRICT_MODULE_RWX
 # select if the architecture provides an asm/dma-direct.h header
 config ARCH_HAS_PHYS_TO_DMA
 	bool
+
+config ARCH_HAS_CPU_RESCTRL
+	bool
+	help
+	  An architecture selects this option to indicate that the necessary
+	  hooks are provided to support the common memory system usage
+	  monitoring and control interfaces provided by the 'resctrl'
+	  filesystem (see RESCTRL_FS).
 
 config HAVE_ARCH_COMPILER_H
 	bool

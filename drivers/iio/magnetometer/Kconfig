@@ -112,6 +112,24 @@ config MMC35240
 	  To compile this driver as a module, choose M here: the module
 	  will be called mmc35240.
 
+config MMC5633_I2C
+	tristate "MMC5633 3-Axis Magnetometer"
+	select REGMAP_I2C
+	depends on I2C
+	help
+	Say yes here to build support forMMC5633 3-Axis Magnetometer.
+	To compile this driver as a module, choose M here: the module
+	will be called MMC5633_I2C.
+
+config MMC5633_I3C
+        tristate "MMC5633 3-Axis Magnetometer"
+        select REGMAP_I3C
+        depends on I3C
+        help
+        Say yes here to build support forMMC5633 3-Axis Magnetometer.
+        To compile this driver as a module, choose M here: the module
+        will be called MMC5633_I3C.
+
 config IIO_ST_MAGN_3AXIS
 	tristate "STMicroelectronics magnetometers 3-Axis Driver"
 	depends on (I2C || SPI_MASTER) && SYSFS

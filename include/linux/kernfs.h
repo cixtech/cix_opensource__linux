@@ -200,6 +200,7 @@ struct kernfs_node {
 	 * parent directly.
 	 */
 	struct kernfs_node	*parent;
+#define __parent parent
 	const char		*name;
 
 	struct rb_node		rb;

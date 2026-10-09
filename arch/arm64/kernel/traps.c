@@ -14,6 +14,7 @@
 #include <linux/spinlock.h>
 #include <linux/uaccess.h>
 #include <linux/hardirq.h>
+#include <linux/irqstage.h>
 #include <linux/kdebug.h>
 #include <linux/module.h>
 #include <linux/kexec.h>
@@ -48,6 +49,15 @@
 #include <asm/stacktrace.h>
 #include <asm/system_misc.h>
 #include <asm/sysreg.h>
+#ifdef CONFIG_PLAT_AP_HOOK
+#include <linux/soc/cix/rdr_platform.h>
+#endif
+#ifdef CONFIG_PLAT_SKY1_AUDIO_TIMEOUT
+#include <linux/soc/cix/dst_audio_timeout_error.h>
+#endif
+#ifdef CONFIG_PLAT_SKY1_RCSU_GASKET_ERROR
+#include <linux/soc/cix/dst_rcsu_gasket_error.h>
+#endif
 
 static bool __kprobes __check_eq(unsigned long pstate)
 {
@@ -203,7 +213,11 @@ static int __die(const char *str, long err, struct pt_regs *regs)
 	return ret;
 }
 
-static DEFINE_RAW_SPINLOCK(die_lock);
+static DEFINE_HARD_SPINLOCK(die_lock);
+
+#ifdef CONFIG_PLAT_KERNELDUMP
+extern void plat_set_cpu_regs(int coreid, struct pt_regs* reg);
+#endif
 
 /*
  * This function is protected against re-entrancy.
@@ -219,6 +233,11 @@ void die(const char *str, struct pt_regs *regs, long err)
 
 	console_verbose();
 	bust_spinlocks(1);
+
+#ifdef CONFIG_PLAT_KERNELDUMP
+	plat_set_cpu_regs(raw_smp_processor_id(), regs);
+#endif
+
 	ret = __die(str, err, regs);
 
 	if (regs && kexec_should_crash(current))
@@ -455,21 +474,33 @@ void do_el0_undef(struct pt_regs *regs, unsigned long esr)
 {
 	u32 insn;
 
+	mark_trap_entry(ARM64_TRAP_UNDI, regs);
+
+	/*
+	 * If the companion core did not switched us to in-band
+	 * context, we may assume that it has handled the trap.
+	 */
+	if (running_oob())
+		goto out_exit;
+
 	/* check for AArch32 breakpoint instructions */
 	if (!aarch32_break_handler(regs))
-		return;
+		goto out_exit;
 
 	if (user_insn_read(regs, &insn))
 		goto out_err;
 
 	if (try_emulate_mrs(regs, insn))
-		return;
+		goto out_exit;
 
 	if (try_emulate_armv8_deprecated(regs, insn))
-		return;
+		goto out_exit;
 
 out_err:
 	force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);
+
+out_exit:
+	mark_trap_exit(ARM64_TRAP_UNDI, regs);
 }
 
 void do_el1_undef(struct pt_regs *regs, unsigned long esr)
@@ -488,7 +519,9 @@ out_err:
 
 void do_el0_bti(struct pt_regs *regs)
 {
+	mark_trap_entry(ARM64_TRAP_BTI, regs);
 	force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);
+	mark_trap_exit(ARM64_TRAP_BTI, regs);
 }
 
 void do_el1_bti(struct pt_regs *regs, unsigned long esr)
@@ -620,10 +653,13 @@ static void user_cache_maint_handler(unsigned long esr, struct pt_regs *regs)
 		return;
 	}
 
-	if (ret)
+	if (ret) {
+		mark_trap_entry(ARM64_TRAP_ACCESS, regs);
 		arm64_notify_segfault(tagged_address);
-	else
+		mark_trap_exit(ARM64_TRAP_ACCESS, regs);
+	} else {
 		arm64_skip_faulting_instruction(regs, AARCH64_INSN_SIZE);
+	}
 }
 
 static void ctr_read_handler(unsigned long esr, struct pt_regs *regs)
@@ -668,8 +704,11 @@ static void mrs_handler(unsigned long esr, struct pt_regs *regs)
 	rt = ESR_ELx_SYS64_ISS_RT(esr);
 	sysreg = esr_sys64_to_sysreg(esr);
 
-	if (do_emulate_mrs(regs, sysreg, rt) != 0)
+	if (do_emulate_mrs(regs, sysreg, rt) != 0) {
+		mark_trap_entry(ARM64_TRAP_ACCESS, regs);
 		force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);
+		mark_trap_exit(ARM64_TRAP_ACCESS, regs);
+	}
 }
 
 static void wfi_handler(unsigned long esr, struct pt_regs *regs)
@@ -909,11 +948,13 @@ void bad_el0_sync(struct pt_regs *regs, int reason, unsigned long esr)
 {
 	unsigned long pc = instruction_pointer(regs);
 
+	mark_trap_entry(ARM64_TRAP_ACCESS, regs);
 	current->thread.fault_address = 0;
 	current->thread.fault_code = esr;
 
 	arm64_force_sig_fault(SIGILL, ILL_ILLOPC, pc,
 			      "Bad EL0 synchronous exception");
+	mark_trap_exit(ARM64_TRAP_ACCESS, regs);
 }
 
 #ifdef CONFIG_VMAP_STACK
@@ -953,12 +994,26 @@ void __noreturn panic_bad_stack(struct pt_regs *regs, unsigned long esr, unsigne
 
 void __noreturn arm64_serror_panic(struct pt_regs *regs, unsigned long esr)
 {
+	unsigned long far;
 	console_verbose();
+
+	far = read_sysreg(far_el1);
 
 	pr_crit("SError Interrupt on CPU%d, code 0x%016lx -- %s\n",
 		smp_processor_id(), esr, esr_get_class_string(esr));
-	if (regs)
+	if (regs) {
 		__show_regs(regs);
+#ifdef CONFIG_PLAT_KERNELDUMP
+		plat_set_cpu_regs(raw_smp_processor_id(), regs);
+#endif
+	}
+
+#ifdef CONFIG_PLAT_SKY1_AUDIO_TIMEOUT
+	sky1_check_audio_timeout_error(far, regs);
+#endif
+#ifdef CONFIG_PLAT_SKY1_RCSU_GASKET_ERROR
+	sky1_check_rcsu_gasket_error();
+#endif
 
 	nmi_panic(regs, "Asynchronous SError Interrupt");
 

@@ -1499,7 +1499,8 @@ static struct irq_chip gic_chip = {
 	.ipi_send_mask		= gic_ipi_send_mask,
 	.flags			= IRQCHIP_SET_TYPE_MASKED |
 				  IRQCHIP_SKIP_SET_WAKE |
-				  IRQCHIP_MASK_ON_SUSPEND,
+				  IRQCHIP_MASK_ON_SUSPEND |
+				  IRQCHIP_PIPELINE_SAFE,
 };
 
 static struct irq_chip gic_eoimode1_chip = {
@@ -1518,7 +1519,8 @@ static struct irq_chip gic_eoimode1_chip = {
 	.ipi_send_mask		= gic_ipi_send_mask,
 	.flags			= IRQCHIP_SET_TYPE_MASKED |
 				  IRQCHIP_SKIP_SET_WAKE |
-				  IRQCHIP_MASK_ON_SUSPEND,
+				  IRQCHIP_MASK_ON_SUSPEND |
+				  IRQCHIP_PIPELINE_SAFE,
 };
 
 static int gic_irq_domain_map(struct irq_domain *d, unsigned int irq,
@@ -2271,6 +2273,7 @@ static int __init gic_of_init(struct device_node *node, struct device_node *pare
 	u64 redist_stride;
 	u32 nr_redist_regions;
 	int err, i;
+	bool single_redist = false;
 
 	dist_base = gic_of_iomap(node, 0, "GICD", &res);
 	if (IS_ERR(dist_base)) {
@@ -2296,6 +2299,9 @@ static int __init gic_of_init(struct device_node *node, struct device_node *pare
 		goto out_unmap_dist;
 	}
 
+	if (of_property_read_bool(node, "single-redist"))
+		single_redist = true;
+
 	for (i = 0; i < nr_redist_regions; i++) {
 		rdist_regs[i].redist_base = gic_of_iomap(node, 1 + i, "GICR", &res);
 		if (IS_ERR(rdist_regs[i].redist_base)) {
@@ -2304,6 +2310,7 @@ static int __init gic_of_init(struct device_node *node, struct device_node *pare
 			goto out_unmap_rdist;
 		}
 		rdist_regs[i].phys_base = res.start;
+		rdist_regs[i].single_redist = single_redist;
 	}
 
 	if (of_property_read_u64(node, "redistributor-stride", &redist_stride))

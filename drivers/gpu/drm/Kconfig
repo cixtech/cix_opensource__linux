@@ -217,6 +217,14 @@ config DRM_EXEC
 	help
 	  Execution context for command submissions
 
+config DRM_GPUVM
+	tristate
+	depends on DRM
+	select DRM_EXEC
+	help
+	  GPU-VM representation providing helpers to manage a GPUs virtual
+	  address space
+
 config DRM_BUDDY
 	tristate
 	depends on DRM
@@ -374,6 +382,8 @@ source "drivers/gpu/drm/lima/Kconfig"
 
 source "drivers/gpu/drm/panfrost/Kconfig"
 
+source "drivers/gpu/drm/panthor/Kconfig"
+
 source "drivers/gpu/drm/aspeed/Kconfig"
 
 source "drivers/gpu/drm/mcde/Kconfig"
@@ -400,6 +410,8 @@ config DRM_HYPERV
 	 that DRM driver is used by default.
 
 	 If M is selected the module will be called hyperv_drm.
+
+source "drivers/gpu/drm/cix/Kconfig"
 
 # Keep legacy drivers last
 

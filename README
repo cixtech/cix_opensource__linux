@@ -1,3 +1,85 @@
+# Xenomai 4 (EVL) Kernel for ARM64
+
+This kernel tree has Xenomai 4 (EVL) real-time extension with the Dovetail
+interrupt pipeline integrated.
+
+## Quick Start
+
+### Prerequisites
+
+- ARM64 cross compiler (aarch64-none-linux-gnu-)
+- Standard Linux kernel build dependencies
+- meson and ninja (userspace libraries only)
+
+### Build Kernel
+
+```bash
+# Using the build script
+./build-kernel.sh
+
+# Or manually
+export CROSS_COMPILE=aarch64-none-linux-gnu-
+export ARCH=arm64
+rm -f .config .config.old
+make LOCALVERSION= defconfig cix.config
+make LOCALVERSION= -j$(nproc) Image modules dtbs
+make LOCALVERSION= bindeb-pkg  # For DEB packages
+```
+
+`LOCALVERSION=` is passed empty so that `scripts/setlocalversion` does not
+append a `+` to the release string; the suffix itself comes from
+`CONFIG_LOCALVERSION` in `cix.config`.
+
+The script will generate DEB packages under `../xenomai4-out/debs/` (relative to kernel source):
+- `linux-image-*.deb` - Kernel image
+- `linux-headers-*.deb` - Kernel headers
+- `linux-libc-dev_*.deb` - Kernel libc development files
+
+### Build Userspace Libraries (libevl)
+
+```bash
+# Using the build script (automatically clones libevl at tag r49)
+./build-userspace.sh
+
+# The libevl source will be cloned to ../libevl/ (relative to kernel dir)
+# DEB package will be generated at ../xenomai4-out/debs/cix-libevl-xenomai4_4.0.0_arm64.deb
+```
+
+The userspace build reads the EVL UAPI headers from `include/uapi/evl/` in this
+kernel tree, so run it from this tree (or point `KERNEL_SRC` at it).
+
+### Configuration
+
+`cix.config` sets:
+
+- `CONFIG_IRQ_PIPELINE=y` - Dovetail interrupt pipeline
+- `CONFIG_DOVETAIL=y` - Dovetail core
+- `CONFIG_EVL=y` - EVL real-time core
+- `CONFIG_LOCALVERSION="-cix-xenomai4"` - Kernel version suffix
+
+`build-kernel.sh` verifies the first three after merging the config and aborts
+if any of them is missing, so a manual build should check them too.
+
+### Install
+
+```bash
+# Install kernel packages on target
+dpkg -i linux-image-*.deb linux-headers-*.deb linux-libc-dev_*.deb
+
+# Install Xenomai userspace libraries
+dpkg -i cix-libevl-xenomai4_*.deb
+```
+
+The Xenomai userspace will be installed under `/usr/xenomai/`:
+- Libraries: `/usr/xenomai/lib/`
+- Headers: `/usr/xenomai/include/`
+- Tools: `/usr/xenomai/bin/`
+
+---
+
+*Standard Linux kernel README follows below*
+---
+
 Linux kernel
 ============
 

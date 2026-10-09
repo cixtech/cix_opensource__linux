@@ -21,7 +21,7 @@
 #include <linux/time.h>
 #include <linux/vmalloc.h>
 #include <uapi/linux/sched/types.h>
-
+#include <linux/cix/cix_scmi_em.h>
 #include <asm/unaligned.h>
 
 #include <acpi/cppc_acpi.h>
@@ -173,16 +173,14 @@ static void cppc_cpufreq_cpu_fie_init(struct cpufreq_policy *policy)
 		init_irq_work(&cppc_fi->irq_work, cppc_irq_work);
 
 		ret = cppc_get_perf_ctrs(cpu, &cppc_fi->prev_perf_fb_ctrs);
-		if (ret) {
+		/*
+		* Don't abort if the CPU was offline while the driver
+		* was getting registered or during resume from S3 state.
+		*/
+		if (ret && cpu_online(cpu)) {
 			pr_warn("%s: failed to read perf counters for cpu:%d: %d\n",
 				__func__, cpu, ret);
-
-			/*
-			 * Don't abort if the CPU was offline while the driver
-			 * was getting registered.
-			 */
-			if (cpu_online(cpu))
-				return;
+			return;
 		}
 	}
 
@@ -331,7 +329,7 @@ static unsigned int cppc_cpufreq_fast_switch(struct cpufreq_policy *policy,
 
 	if (ret) {
 		pr_debug("Failed to set target on CPU:%d. ret:%d\n",
-			 cpu, ret);
+		         cpu, ret);
 		return 0;
 	}
 
@@ -377,6 +375,7 @@ static unsigned int cppc_cpufreq_get_transition_delay_us(unsigned int cpu)
 
 #if defined(CONFIG_ARM64) && defined(CONFIG_ENERGY_MODEL)
 
+#ifndef CONFIG_CIX_THERMAL
 static DEFINE_PER_CPU(unsigned int, efficiency_class);
 static void cppc_cpufreq_register_em(struct cpufreq_policy *policy);
 
@@ -561,6 +560,71 @@ static void cppc_cpufreq_register_em(struct cpufreq_policy *policy)
 			get_perf_level_count(policy), &em_cb,
 			cpu_data->shared_cpu_map, 0);
 }
+#else
+static unsigned int get_perf_level_count(struct cpufreq_policy *policy)
+{
+	struct cppc_cpudata *cpu_data;
+	int cpu = policy->cpu;
+
+	cpu_data = policy->driver_data;
+	if (cpu_data == NULL) {
+		pr_warn("No CPU data for CPU%d\n", cpu);
+		return 0;
+	}
+	return cpu_data->opp_level_num;
+}
+
+static int cix_cppc_get_cpu_power(struct device *cpu_dev,
+				  unsigned long *power, unsigned long *KHz)
+{
+	u32 level_num;
+	struct cpufreq_policy *policy;
+	struct cppc_perf_caps *perf_caps;
+	struct cppc_cpudata *cpu_data;
+	struct cppc_opp *opp;
+
+	policy = cpufreq_cpu_get(cpu_dev->id);
+	if (!policy)
+		return -EINVAL;
+
+	cpu_data = policy->driver_data;
+	perf_caps = &cpu_data->perf_caps;
+
+	opp = cpu_data->opp;
+	level_num = cpu_data->opp_level_num;
+
+	for (int i = 0; i < level_num; i++) {
+		if (*KHz > opp[i].freq)
+			continue;
+
+		*KHz = opp[i].freq;
+		*power = opp[i].power;
+		pr_debug("cix_cppc_get_cpu_power: cpu:%d, level:%d, KHz:%lu, power:%lu\n",
+			 cpu_dev->id, i, *KHz, *power);
+		break;
+	}
+
+	return 0;
+}
+
+static void cix_cppc_cpufreq_register_em(struct cpufreq_policy *policy)
+{
+	struct cppc_cpudata *cpu_data;
+	struct em_data_callback em_cb = EM_DATA_CB(cix_cppc_get_cpu_power);
+
+	cpu_data = policy->driver_data;
+	em_dev_register_perf_domain(get_cpu_device(policy->cpu),
+			get_perf_level_count(policy), &em_cb,
+			cpu_data->shared_cpu_map, 0);
+}
+
+static int populate_efficiency_class(void)
+{
+	cppc_cpufreq_driver.register_em = cix_cppc_cpufreq_register_em;
+
+	return 0;
+}
+#endif
 
 #else
 static int populate_efficiency_class(void)
@@ -613,6 +677,87 @@ static void cppc_cpufreq_put_cpu_data(struct cpufreq_policy *policy)
 	free_cpumask_var(cpu_data->shared_cpu_map);
 	kfree(cpu_data);
 	policy->driver_data = NULL;
+}
+
+static int cppc_opp_init(struct cpufreq_policy *policy)
+{
+	struct acpi_object_list input;
+	union acpi_object params[2];
+	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+	acpi_status status;
+	struct cppc_perf_caps *perf_caps;
+	struct cppc_cpudata *cpu_data;
+	struct device *cpu_dev;
+	acpi_handle handle;
+	union acpi_object *package;
+	u32 level_index = 0;
+	u32 *data;
+
+	pr_debug("cppc_opp_init: Initializing OPPs for CPU:%d\n", policy->cpu);
+	cpu_data = policy->driver_data;
+	if (!cpu_data) {
+		pr_warn("No CPU data for CPU%d\n", policy->cpu);
+		cpufreq_cpu_put(policy);
+		return -ENODEV;
+	}
+
+	perf_caps = &cpu_data->perf_caps;
+
+	params[0].type = ACPI_TYPE_INTEGER;
+	params[0].integer.value = cpu_data->perf_domain;
+	params[1].type = ACPI_TYPE_INTEGER;
+	params[1].integer.value = level_index;
+
+	input.count = 2;
+	input.pointer = params;
+
+	cpu_dev = get_cpu_device(policy->cpu);
+	handle = ACPI_HANDLE(cpu_dev);
+	if (!handle) {
+		pr_err("No ACPI handle for CPU:%d\n", cpu_dev->id);
+		return -EINVAL;
+	}
+
+	status = acpi_evaluate_object(handle, "\\_SB.PMMX.PEFG", &input, &buffer);
+	if (ACPI_FAILURE(status)) {
+		pr_err("Failed to call _PEFG: %s\n", acpi_format_exception(status));
+		goto OUT;
+	}
+
+	package = buffer.pointer;
+	if (!package || package->type != ACPI_TYPE_BUFFER) {
+		pr_err("cppc_opp_init: cpu:%d, no buffer returned\n",
+			cpu_dev->id);
+		goto OUT;
+	}
+
+	data = (u32 *)package->buffer.pointer;
+
+	cpu_data->opp_level_num = data[1] & 0xfff;
+	if (cpu_data->opp_level_num == 0) {
+		pr_warn("cppc_opp_init: cpu:%d, no performance levels found\n",
+			cpu_dev->id);
+		goto OUT;
+	}
+	if (cpu_data->opp_level_num > MAX_OPP_LEVELS) {
+		pr_warn("cppc_opp_init: cpu:%d, too many performance levels: %d\n",
+			cpu_dev->id, cpu_data->opp_level_num);
+		goto OUT;
+	}
+	for (int i = 0; i < cpu_data->opp_level_num; i++) {
+		cpu_data->opp[i].perf = data[2 + i * 3];
+		cpu_data->opp[i].power = data[3 + i * 3];
+		cpu_data->opp[i].freq = cppc_perf_to_khz(perf_caps,
+							cpu_data->opp[i].perf);
+		pr_debug("cppc_opp_init: cpu:%d, level:%d, perf:%u, freq:%u\n",
+			cpu_dev->id, i, cpu_data->opp[i].perf, cpu_data->opp[i].freq);
+	}
+
+OUT:
+	/* Free the buffer allocated by acpi_evaluate_object */
+	if (buffer.pointer)
+		kfree(buffer.pointer);
+	return 0;
 }
 
 static int cppc_cpufreq_cpu_init(struct cpufreq_policy *policy)
@@ -690,6 +835,7 @@ static int cppc_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	}
 
 	cppc_cpufreq_cpu_fie_init(policy);
+	cppc_opp_init(policy);
 	return 0;
 
 out:
@@ -703,6 +849,12 @@ static int cppc_cpufreq_cpu_exit(struct cpufreq_policy *policy)
 	struct cppc_perf_caps *caps = &cpu_data->perf_caps;
 	unsigned int cpu = policy->cpu;
 	int ret;
+	struct device *dev;
+	struct acpi_device *device;
+	struct acpi_processor *pr = per_cpu(processors, cpu);
+
+	dev = get_cpu_device(pr->id);
+	device = ACPI_COMPANION(dev);
 
 	cppc_cpufreq_cpu_fie_exit(policy);
 
@@ -714,6 +866,10 @@ static int cppc_cpufreq_cpu_exit(struct cpufreq_policy *policy)
 			 caps->lowest_perf, cpu, ret);
 
 	cppc_cpufreq_put_cpu_data(policy);
+
+#ifdef CONFIG_ARM64
+	acpi_processor_thermal_exit(pr, device);
+#endif
 	return 0;
 }
 
@@ -749,6 +905,29 @@ static int cppc_perf_from_fbctrs(struct cppc_cpudata *cpu_data,
 	return (reference_perf * delta_delivered) / delta_reference;
 }
 
+#ifdef CONFIG_ARCH_CIX
+/*
+ * On CIX platform, perf calculation is inaccurate from delivered performance
+ * counter and reference performance counter. We reuse the desired performance
+ * register to store the real performance calculated by the platform.
+ */
+ static unsigned int cix_cppc_cpufreq_get_rate(unsigned int cpu)
+ {
+	struct cpufreq_policy *policy = cpufreq_cpu_get(cpu);
+	struct cppc_cpudata *cpu_data = policy->driver_data;
+	 struct cppc_perf_caps *perf_caps = &cpu_data->perf_caps;
+	u64 desired_perf;
+	int ret;
+
+	cpufreq_cpu_put(policy);
+
+	ret = cppc_get_desired_perf(cpu, &desired_perf);
+	if (ret < 0)
+		return -EIO;
+
+	return cppc_perf_to_khz(perf_caps, desired_perf);
+}
+#else
 static int cppc_get_perf_ctrs_sample(int cpu,
 				     struct cppc_perf_fb_ctrs *fb_ctrs_t0,
 				     struct cppc_perf_fb_ctrs *fb_ctrs_t1)
@@ -808,6 +987,7 @@ out_invalid_counters:
 
 	return cppc_perf_to_khz(&cpu_data->perf_caps, delivered_perf);
 }
+#endif
 
 static int cppc_cpufreq_set_boost(struct cpufreq_policy *policy, int state)
 {
@@ -847,10 +1027,14 @@ static struct freq_attr *cppc_cpufreq_attr[] = {
 };
 
 static struct cpufreq_driver cppc_cpufreq_driver = {
-	.flags = CPUFREQ_CONST_LOOPS,
+	.flags = CPUFREQ_IS_COOLING_DEV | CPUFREQ_CONST_LOOPS,
 	.verify = cppc_verify_policy,
 	.target = cppc_cpufreq_set_target,
+#ifdef CONFIG_ARCH_CIX
+	.get = cix_cppc_cpufreq_get_rate,
+#else
 	.get = cppc_cpufreq_get_rate,
+#endif
 	.fast_switch = cppc_cpufreq_fast_switch,
 	.init = cppc_cpufreq_cpu_init,
 	.exit = cppc_cpufreq_cpu_exit,

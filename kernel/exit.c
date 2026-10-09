@@ -14,6 +14,7 @@
 #include <linux/sched/task_stack.h>
 #include <linux/sched/cputime.h>
 #include <linux/interrupt.h>
+#include <linux/irq_pipeline.h>
 #include <linux/module.h>
 #include <linux/capability.h>
 #include <linux/completion.h>
@@ -819,6 +820,7 @@ void __noreturn do_exit(long code)
 
 	WARN_ON(tsk->plug);
 
+	profile_task_exit(tsk);
 	kcov_task_exit(tsk);
 	kmsan_task_exit(tsk);
 
@@ -828,6 +830,7 @@ void __noreturn do_exit(long code)
 
 	io_uring_files_cancel();
 	exit_signals(tsk);  /* sets PF_EXITING */
+	inband_exit_notify();
 
 	/* sync mm's RSS info before statistics gathering */
 	if (tsk->mm)
@@ -924,6 +927,7 @@ void __noreturn do_exit(long code)
 	lockdep_free_task(tsk);
 	do_task_dead();
 }
+EXPORT_SYMBOL_GPL(do_exit);
 
 void __noreturn make_task_dead(int signr)
 {

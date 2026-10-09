@@ -27,9 +27,15 @@
 #include <linux/pci-ats.h>
 #include <linux/platform_device.h>
 
+#ifdef CONFIG_ARCH_CIX
+#include <linux/libfdt.h>
+#include <linux/of_fdt.h>
+#endif
+
 #include "arm-smmu-v3.h"
 #include "../../dma-iommu.h"
 #include "../../iommu-sva.h"
+#include "arm-smmu-v3-walk.h"
 
 static bool disable_bypass = true;
 module_param(disable_bypass, bool, 0444);
@@ -85,6 +91,110 @@ static struct arm_smmu_option_prop arm_smmu_options[] = {
 	{ ARM_SMMU_OPT_PAGE0_REGS_ONLY, "cavium,cn9900-broken-page1-regspace"},
 	{ 0, NULL},
 };
+
+#ifdef CONFIG_ARCH_CIX
+static BLOCKING_NOTIFIER_HEAD(smmu_attach_chain_head);
+static BLOCKING_NOTIFIER_HEAD(smmu_probe_chain_head);
+
+int register_smmu_attach_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&smmu_attach_chain_head, nb);
+}
+EXPORT_SYMBOL_GPL(register_smmu_attach_notifier);
+
+int unregister_smmu_attach_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&smmu_attach_chain_head, nb);
+}
+EXPORT_SYMBOL_GPL(unregister_smmu_attach_notifier);
+
+int smmu_attach_notifier_call_chain(unsigned long val, void *data)
+{
+	return blocking_notifier_call_chain(&smmu_attach_chain_head, val, data);
+}
+
+int register_smmu_probe_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&smmu_probe_chain_head, nb);
+}
+EXPORT_SYMBOL_GPL(register_smmu_probe_notifier);
+
+int unregister_smmu_probe_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&smmu_probe_chain_head, nb);
+}
+EXPORT_SYMBOL_GPL(unregister_smmu_probe_notifier);
+
+int smmu_probe_notifier_call_chain(unsigned long val, void *data)
+{
+	return blocking_notifier_call_chain(&smmu_probe_chain_head, val, data);
+}
+
+static int arm_smmu_direct_map(struct iommu_domain *domain, struct device *dev)
+{
+	struct iommu_resv_region *entry;
+	struct list_head mappings;
+	unsigned long pg_size;
+	int ret = 0;
+
+	pg_size = domain->pgsize_bitmap ? 1UL << __ffs(domain->pgsize_bitmap) : 0;
+	INIT_LIST_HEAD(&mappings);
+
+	if (WARN_ON_ONCE(iommu_is_dma_domain(domain) && !pg_size))
+		return -EINVAL;
+
+	iommu_get_resv_regions(dev, &mappings);
+
+	/* We need to consider overlapping regions for different devices */
+	list_for_each_entry(entry, &mappings, list) {
+		dma_addr_t start, end, addr;
+		size_t map_size = 0;
+
+		if (entry->type == IOMMU_RESV_DIRECT)
+			dev->iommu->require_direct = 1;
+
+		if ((entry->type != IOMMU_RESV_DIRECT &&
+		     entry->type != IOMMU_RESV_DIRECT_RELAXABLE) ||
+		    !iommu_is_dma_domain(domain))
+			continue;
+
+		start = ALIGN(entry->start, pg_size);
+		end   = ALIGN(entry->start + entry->length, pg_size);
+
+		for (addr = start; addr <= end; addr += pg_size) {
+			phys_addr_t phys_addr;
+
+			if (addr == end)
+				goto map_end;
+
+			phys_addr = iommu_iova_to_phys(domain, addr);
+			if (!phys_addr) {
+				map_size += pg_size;
+				continue;
+			}
+
+map_end:
+			if (map_size) {
+				ret = iommu_map(domain, addr - map_size,
+						addr - map_size, map_size,
+						entry->prot, GFP_KERNEL);
+				if (ret)
+					goto out;
+				map_size = 0;
+			}
+		}
+
+	}
+
+	if (!list_empty(&mappings) && iommu_is_dma_domain(domain))
+		iommu_flush_iotlb_all(domain);
+
+out:
+	iommu_put_resv_regions(dev, &mappings);
+
+	return 0;
+}
+#endif
 
 static void parse_driver_options(struct arm_smmu_device *smmu)
 {
@@ -989,14 +1099,14 @@ static void arm_smmu_sync_cd(struct arm_smmu_domain *smmu_domain,
 
 	cmds.num = 0;
 
-	spin_lock_irqsave(&smmu_domain->devices_lock, flags);
+	raw_spin_lock_irqsave(&smmu_domain->devices_lock, flags);
 	list_for_each_entry(master, &smmu_domain->devices, domain_head) {
 		for (i = 0; i < master->num_streams; i++) {
 			cmd.cfgi.sid = master->streams[i].id;
 			arm_smmu_cmdq_batch_add(smmu, &cmds, &cmd);
 		}
 	}
-	spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
+	raw_spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
 
 	arm_smmu_cmdq_batch_submit(smmu, &cmds);
 }
@@ -1839,7 +1949,7 @@ int arm_smmu_atc_inv_domain(struct arm_smmu_domain *smmu_domain, int ssid,
 
 	cmds.num = 0;
 
-	spin_lock_irqsave(&smmu_domain->devices_lock, flags);
+	raw_spin_lock_irqsave(&smmu_domain->devices_lock, flags);
 	list_for_each_entry(master, &smmu_domain->devices, domain_head) {
 		if (!master->ats_enabled)
 			continue;
@@ -1849,7 +1959,7 @@ int arm_smmu_atc_inv_domain(struct arm_smmu_domain *smmu_domain, int ssid,
 			arm_smmu_cmdq_batch_add(smmu_domain->smmu, &cmds, &cmd);
 		}
 	}
-	spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
+	raw_spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
 
 	return arm_smmu_cmdq_batch_submit(smmu_domain->smmu, &cmds);
 }
@@ -2054,7 +2164,7 @@ static struct iommu_domain *arm_smmu_domain_alloc(unsigned type)
 
 	mutex_init(&smmu_domain->init_mutex);
 	INIT_LIST_HEAD(&smmu_domain->devices);
-	spin_lock_init(&smmu_domain->devices_lock);
+	raw_spin_lock_init(&smmu_domain->devices_lock);
 	INIT_LIST_HEAD(&smmu_domain->mmu_notifiers);
 
 	return &smmu_domain->domain;
@@ -2396,13 +2506,17 @@ static void arm_smmu_detach_dev(struct arm_smmu_master *master)
 
 	arm_smmu_disable_ats(master);
 
-	spin_lock_irqsave(&smmu_domain->devices_lock, flags);
+	raw_spin_lock_irqsave(&smmu_domain->devices_lock, flags);
 	list_del(&master->domain_head);
-	spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
+	raw_spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
 
 	master->domain = NULL;
 	master->ats_enabled = false;
 	arm_smmu_install_ste_for_dev(master);
+
+#ifdef CONFIG_ARCH_CIX
+	smmu_attach_notifier_call_chain(SMMU_DEV_DETACH, master->dev);
+#endif
 }
 
 static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
@@ -2466,13 +2580,21 @@ static int arm_smmu_attach_dev(struct iommu_domain *domain, struct device *dev)
 	if (smmu_domain->stage != ARM_SMMU_DOMAIN_BYPASS)
 		master->ats_enabled = arm_smmu_ats_supported(master);
 
+#ifdef CONFIG_ARCH_CIX
+	arm_smmu_direct_map(domain, dev);
+#endif
+
 	arm_smmu_install_ste_for_dev(master);
 
-	spin_lock_irqsave(&smmu_domain->devices_lock, flags);
+	raw_spin_lock_irqsave(&smmu_domain->devices_lock, flags);
 	list_add(&master->domain_head, &smmu_domain->devices);
-	spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
+	raw_spin_unlock_irqrestore(&smmu_domain->devices_lock, flags);
 
 	arm_smmu_enable_ats(master);
+
+#ifdef CONFIG_ARCH_CIX
+	smmu_attach_notifier_call_chain(SMMU_DEV_ATTACH, dev);
+#endif
 
 out_unlock:
 	mutex_unlock(&smmu_domain->init_mutex);
@@ -2703,6 +2825,10 @@ static struct iommu_device *arm_smmu_probe_device(struct device *dev)
 	    smmu->features & ARM_SMMU_FEAT_STALL_FORCE)
 		master->stall_enabled = true;
 
+#ifdef CONFIG_ARM_SMMU_V3_WALK
+	smmu_master_walk_register(master);
+#endif
+
 	return &smmu->iommu;
 
 err_free_master:
@@ -2717,6 +2843,9 @@ static void arm_smmu_release_device(struct device *dev)
 
 	if (WARN_ON(arm_smmu_master_sva_enabled(master)))
 		iopf_queue_remove_device(master->smmu->evtq.iopf, dev);
+#ifdef CONFIG_ARM_SMMU_V3_WALK
+	smmu_master_walk_unregister(master);
+#endif
 	arm_smmu_detach_dev(master);
 	arm_smmu_disable_pasid(master);
 	arm_smmu_remove_master(master);
@@ -3283,6 +3412,61 @@ static int arm_smmu_setup_irqs(struct arm_smmu_device *smmu)
 	return 0;
 }
 
+static void arm_smmu_reset_unique_irqs(struct arm_smmu_device *smmu)
+{
+	struct msi_desc *desc;
+	struct msi_msg msg;
+
+	desc = irq_get_msi_desc(smmu->evtq.q.irq);
+	if (desc) {
+		get_cached_msi_msg(smmu->evtq.q.irq, &msg);
+		arm_smmu_write_msi_msg(desc, &msg);
+	}
+
+	desc = irq_get_msi_desc(smmu->gerr_irq);
+	if (desc) {
+		get_cached_msi_msg(smmu->gerr_irq, &msg);
+		arm_smmu_write_msi_msg(desc, &msg);
+	}
+
+	if (smmu->features & ARM_SMMU_FEAT_PRI) {
+		desc = irq_get_msi_desc(smmu->priq.q.irq);
+		if (desc) {
+			get_cached_msi_msg(smmu->priq.q.irq, &msg);
+			arm_smmu_write_msi_msg(desc, &msg);
+		}
+	}
+}
+
+static int arm_smmu_reset_irqs(struct arm_smmu_device *smmu)
+{
+	int ret, irq;
+	u32 irqen_flags = IRQ_CTRL_EVTQ_IRQEN | IRQ_CTRL_GERROR_IRQEN;
+
+	/* Disable IRQs first */
+	ret = arm_smmu_write_reg_sync(smmu, 0, ARM_SMMU_IRQ_CTRL,
+				      ARM_SMMU_IRQ_CTRLACK);
+	if (ret) {
+		dev_err(smmu->dev, "failed to disable irqs\n");
+		return ret;
+	}
+
+	irq = smmu->combined_irq;
+	if (!irq)
+		arm_smmu_reset_unique_irqs(smmu);
+
+	if (smmu->features & ARM_SMMU_FEAT_PRI)
+		irqen_flags |= IRQ_CTRL_PRIQ_IRQEN;
+
+	/* Enable interrupt generation on the SMMU */
+	ret = arm_smmu_write_reg_sync(smmu, irqen_flags,
+				      ARM_SMMU_IRQ_CTRL, ARM_SMMU_IRQ_CTRLACK);
+	if (ret)
+		dev_warn(smmu->dev, "failed to reset irqs\n");
+
+	return 0;
+}
+
 static int arm_smmu_device_disable(struct arm_smmu_device *smmu)
 {
 	int ret;
@@ -3294,7 +3478,7 @@ static int arm_smmu_device_disable(struct arm_smmu_device *smmu)
 	return ret;
 }
 
-static int arm_smmu_device_reset(struct arm_smmu_device *smmu, bool bypass)
+static int arm_smmu_device_reset(struct arm_smmu_device *smmu)
 {
 	int ret;
 	u32 reg, enables;
@@ -3402,9 +3586,9 @@ static int arm_smmu_device_reset(struct arm_smmu_device *smmu, bool bypass)
 		}
 	}
 
-	ret = arm_smmu_setup_irqs(smmu);
+	ret = arm_smmu_reset_irqs(smmu);
 	if (ret) {
-		dev_err(smmu->dev, "failed to setup irqs\n");
+		dev_err(smmu->dev, "failed to reset irqs\n");
 		return ret;
 	}
 
@@ -3412,7 +3596,7 @@ static int arm_smmu_device_reset(struct arm_smmu_device *smmu, bool bypass)
 		enables &= ~(CR0_EVTQEN | CR0_PRIQEN);
 
 	/* Enable the SMMU interface, or ensure bypass */
-	if (!bypass || disable_bypass) {
+	if (!smmu->bypass || disable_bypass) {
 		enables |= CR0_SMMUEN;
 	} else {
 		ret = arm_smmu_update_gbpa(smmu, 0, GBPA_ABORT);
@@ -3767,6 +3951,83 @@ static void __iomem *arm_smmu_ioremap(struct device *dev, resource_size_t start,
 	return devm_ioremap_resource(dev, &res);
 }
 
+#ifdef CONFIG_ARCH_CIX
+static void arm_smmu_set_ste(struct arm_smmu_device *smmu, int sid, bool bypass)
+{
+	__le64 *step;
+	int ret;
+
+	ret = arm_smmu_init_sid_strtab(smmu, sid);
+	if (ret) {
+		dev_err(smmu->dev, "RMR SID(0x%x) bypass failed\n", sid);
+		return;
+	}
+
+	step = arm_smmu_get_step_for_sid(smmu, sid);
+	arm_smmu_init_bypass_stes(step, 1, bypass);
+}
+
+static void arm_smmu_iort_rmr_install_bypass_ste(struct arm_smmu_device *smmu)
+{
+	struct list_head rmr_list;
+	struct iommu_resv_region *e;
+
+	INIT_LIST_HEAD(&rmr_list);
+	iort_get_rmr_sids(dev_fwnode(smmu->dev), &rmr_list);
+
+	list_for_each_entry(e, &rmr_list, list) {
+		struct iommu_iort_rmr_data *rmr;
+		int i;
+
+		rmr = container_of(e, struct iommu_iort_rmr_data, rr);
+		for (i = 0; i < rmr->num_sids; i++)
+			arm_smmu_set_ste(smmu, rmr->sids[i], true);
+	}
+
+	iort_put_rmr_sids(dev_fwnode(smmu->dev), &rmr_list);
+}
+
+static void arm_smmu_dt_rmr_install_bypass_ste(struct arm_smmu_device *smmu)
+{
+	int node, child;
+	const void *fdt = initial_boot_params;
+
+	if (!fdt)
+		return;
+
+	node = fdt_path_offset(fdt, "/reserved-memory");
+	if (node < 0)
+		return;
+
+	fdt_for_each_subnode(child, fdt, node) {
+		int index = 0;
+		struct of_phandle_args args;
+		struct device_node *np;
+		const __be32 *maps;
+		u32 phandle;
+
+		maps = fdt_getprop(fdt, child, "iommu-addresses", NULL);
+		if (!maps)
+			continue;
+
+		phandle = be32_to_cpup(maps);
+		np = of_find_node_by_phandle(phandle);
+
+		if (!of_parse_phandle_with_args(np,
+				"iommus", "#iommu-cells", index, &args)) {
+			if (smmu->dev->of_node == args.np && args.args_count > 0)
+				arm_smmu_set_ste(smmu, args.args[0], true);
+			index++;
+		}
+	}
+}
+
+static void arm_smmu_install_bypass_ste(struct arm_smmu_device *smmu)
+{
+	arm_smmu_iort_rmr_install_bypass_ste(smmu);
+	arm_smmu_dt_rmr_install_bypass_ste(smmu);
+}
+#else
 static void arm_smmu_rmr_install_bypass_ste(struct arm_smmu_device *smmu)
 {
 	struct list_head rmr_list;
@@ -3796,6 +4057,26 @@ static void arm_smmu_rmr_install_bypass_ste(struct arm_smmu_device *smmu)
 
 	iort_put_rmr_sids(dev_fwnode(smmu->dev), &rmr_list);
 }
+#endif
+
+static int __maybe_unused arm_smmu_suspend(struct device *dev)
+{
+	struct arm_smmu_device *smmu = dev_get_drvdata(dev);
+
+	/* disable smmu to clear CR0 */
+	arm_smmu_device_disable(smmu);
+
+	return 0;
+}
+
+static int __maybe_unused arm_smmu_resume(struct device *dev)
+{
+	struct arm_smmu_device *smmu = dev_get_drvdata(dev);
+
+	arm_smmu_device_reset(smmu);
+
+	return 0;
+}
 
 static int arm_smmu_device_probe(struct platform_device *pdev)
 {
@@ -3804,7 +4085,6 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	resource_size_t ioaddr;
 	struct arm_smmu_device *smmu;
 	struct device *dev = &pdev->dev;
-	bool bypass;
 
 	smmu = devm_kzalloc(dev, sizeof(*smmu), GFP_KERNEL);
 	if (!smmu)
@@ -3820,7 +4100,7 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	}
 
 	/* Set bypass mode according to firmware probing result */
-	bypass = !!ret;
+	smmu->bypass = !!ret;
 
 	/* Base address */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -3880,13 +4160,32 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	/* Record our private device structure */
 	platform_set_drvdata(pdev, smmu);
 
+#ifdef CONFIG_ARCH_CIX
+	arm_smmu_install_bypass_ste(smmu);
+#else
 	/* Check for RMRs and install bypass STEs if any */
 	arm_smmu_rmr_install_bypass_ste(smmu);
+#endif
+
+	/* Setup irqs */
+	ret = arm_smmu_setup_irqs(smmu);
+	if (ret) {
+		dev_err(smmu->dev, "failed to setup irqs\n");
+		return ret;
+	}
+
+#ifdef CONFIG_ARCH_CIX
+	smmu_probe_notifier_call_chain(SMMU_EN_BEFORE, dev);
+#endif
 
 	/* Reset the device */
-	ret = arm_smmu_device_reset(smmu, bypass);
+	ret = arm_smmu_device_reset(smmu);
 	if (ret)
 		goto err_disable;
+
+#ifdef CONFIG_ARCH_CIX
+	smmu_probe_notifier_call_chain(SMMU_EN_AFTER, dev);
+#endif
 
 	/* And we're up. Go go go! */
 	ret = iommu_device_sysfs_add(&smmu->iommu, dev, NULL,
@@ -3940,12 +4239,16 @@ static void arm_smmu_driver_unregister(struct platform_driver *drv)
 	arm_smmu_sva_notifier_synchronize();
 	platform_driver_unregister(drv);
 }
+static const struct dev_pm_ops arm_smmu_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(arm_smmu_suspend, arm_smmu_resume)
+};
 
 static struct platform_driver arm_smmu_driver = {
 	.driver	= {
 		.name			= "arm-smmu-v3",
 		.of_match_table		= arm_smmu_of_match,
 		.suppress_bind_attrs	= true,
+		.pm			= &arm_smmu_pm_ops,
 	},
 	.probe	= arm_smmu_device_probe,
 	.remove_new = arm_smmu_device_remove,

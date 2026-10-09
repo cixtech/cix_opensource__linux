@@ -165,6 +165,18 @@ install_kernel_headers () {
 
 	mkdir -p $pdir/lib/modules/$version/
 	ln -s /usr/src/linux-headers-$version $pdir/lib/modules/$version/build
+
+	# headers deb does not run postinst.d; fire header_postinst.d so DKMS can rebuild
+	debhookdir=${KDEB_HOOKDIR:-/etc/kernel}
+	mkdir -p "${pdir}${debhookdir}/header_postinst.d"
+	mkdir -p "${pdir}/DEBIAN"
+	cat <<-EOF > "${pdir}/DEBIAN/postinst"
+	#!/bin/sh
+	set -e
+	test -d ${debhookdir}/header_postinst.d && run-parts --arg="${version}" ${debhookdir}/header_postinst.d
+	exit 0
+	EOF
+	chmod 755 "${pdir}/DEBIAN/postinst"
 }
 
 install_libc_headers () {
@@ -192,7 +204,7 @@ do
 	*-dbg)
 		# This must be done after linux-image, that is, we expect the
 		# debug package appears after linux-image in debian/control.
-		install_linux_image_dbg debian/linux-image-dbg debian/linux-image;;
+		;;#install_linux_image_dbg debian/linux-image-dbg debian/linux-image;;
 	linux-image-*|user-mode-linux-*)
 		install_linux_image debian/linux-image ${package};;
 	linux-libc-dev)
@@ -206,7 +218,7 @@ for package in ${packages_enabled}
 do
 	case ${package} in
 	*-dbg)
-		create_package ${package} debian/linux-image-dbg;;
+		;;#create_package ${package} debian/linux-image-dbg;;
 	linux-image-*|user-mode-linux-*)
 		create_package ${package} debian/linux-image;;
 	linux-libc-dev)

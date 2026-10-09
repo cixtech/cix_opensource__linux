@@ -40,7 +40,6 @@
 #include <drm/drm_file.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_managed.h>
-#include <drm/drm_gpuva_mgr.h>
 
 #include "drm_crtc_internal.h"
 #include "drm_internal.h"
@@ -192,21 +191,21 @@ static const struct file_operations drm_debugfs_fops = {
  * Returns: 0 on success, -ENODEV if the &mgr is not initialized
  */
 int drm_debugfs_gpuva_info(struct seq_file *m,
-			   struct drm_gpuva_manager *mgr)
+			   struct drm_gpuvm *gpuvm)
 {
-	struct drm_gpuva *va, *kva = &mgr->kernel_alloc_node;
+	struct drm_gpuva *va, *kva = &gpuvm->kernel_alloc_node;
 
-	if (!mgr->name)
+	if (!gpuvm->name)
 		return -ENODEV;
 
 	seq_printf(m, "DRM GPU VA space (%s) [0x%016llx;0x%016llx]\n",
-		   mgr->name, mgr->mm_start, mgr->mm_start + mgr->mm_range);
+		   gpuvm->name, gpuvm->mm_start, gpuvm->mm_start + gpuvm->mm_range);
 	seq_printf(m, "Kernel reserved node [0x%016llx;0x%016llx]\n",
 		   kva->va.addr, kva->va.addr + kva->va.range);
 	seq_puts(m, "\n");
 	seq_puts(m, " VAs | start              | range              | end                | object             | object offset\n");
 	seq_puts(m, "-------------------------------------------------------------------------------------------------------------\n");
-	drm_gpuva_for_each_va(va, mgr) {
+	drm_gpuvm_for_each_va(va, gpuvm) {
 		if (unlikely(va == kva))
 			continue;
 

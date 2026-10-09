@@ -34,6 +34,7 @@ obj-$(CONFIG_BT_NXPUART)	+= btnxpuart.o
 obj-$(CONFIG_BT_HCIUART_NOKIA)	+= hci_nokia.o
 
 obj-$(CONFIG_BT_HCIRSI)		+= btrsi.o
+obj-$(CONFIG_BT_RTKBTUSB)	+= rtk_btusb.o
 
 btmrvl-y			:= btmrvl_main.o
 btmrvl-$(CONFIG_DEBUG_FS)	+= btmrvl_debugfs.o

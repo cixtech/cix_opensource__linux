@@ -6,6 +6,7 @@
  * Author: Jassi Brar <jassisinghbrar@gmail.com>
  */
 
+#include <linux/acpi.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
 #include <linux/mutex.h>
@@ -289,6 +290,51 @@ int mbox_send_message(struct mbox_chan *chan, void *mssg)
 }
 EXPORT_SYMBOL_GPL(mbox_send_message);
 
+static struct of_phandle_args *to_of_phandle_args(struct fwnode_reference_args *fwnode_args) {
+	struct of_phandle_args of_args;
+	of_args.args_count = fwnode_args->nargs;
+	of_args.np = to_of_node(fwnode_args->fwnode);
+	for (int i = 0; i < fwnode_args->nargs; i++) {
+		of_args.args[i] = fwnode_args->args[i];
+	}
+	memcpy(fwnode_args, &of_args, sizeof(struct of_phandle_args));
+	return (struct of_phandle_args *)fwnode_args;
+}
+
+static struct mbox_chan *mbox_fwnode_parse_chan(struct device *dev, int index)
+{
+	struct fwnode_reference_args fwnode_args;
+	struct mbox_controller *mbox;
+	struct mbox_chan *chan;
+
+	if (fwnode_property_get_reference_args(dev->fwnode, "mboxes",
+				       "#mbox-cells", 1, index, &fwnode_args)) {
+		dev_dbg(dev, "%s: can't parse \"mboxes\" property\n", __func__);
+		return ERR_PTR(-ENODEV);
+	}
+
+	chan = ERR_PTR(-EPROBE_DEFER);
+	list_for_each_entry(mbox, &mbox_cons, node)
+		if (mbox->dev->fwnode == fwnode_args.fwnode) {
+			if (mbox->dev->of_node && mbox->of_xlate)
+				chan = mbox->of_xlate(mbox, to_of_phandle_args(&fwnode_args));
+			else
+				chan = mbox->fwnode_xlate(mbox, &fwnode_args);
+			break;
+		}
+
+	fwnode_handle_put(fwnode_args.fwnode);
+	return chan;
+}
+
+static struct mbox_chan *mbox_parse_chan(struct device *dev, int index)
+{
+	if (!dev)
+		return ERR_PTR(-ENODEV);
+
+	return mbox_fwnode_parse_chan(dev, index);
+}
+
 /**
  * mbox_flush - flush a mailbox channel
  * @chan: mailbox channel to flush
@@ -403,72 +449,73 @@ EXPORT_SYMBOL_GPL(mbox_bind_client);
 struct mbox_chan *mbox_request_channel(struct mbox_client *cl, int index)
 {
 	struct device *dev = cl->dev;
-	struct mbox_controller *mbox;
-	struct of_phandle_args spec;
 	struct mbox_chan *chan;
+	unsigned long flags;
 	int ret;
-
-	if (!dev || !dev->of_node) {
-		pr_debug("%s: No owner device node\n", __func__);
-		return ERR_PTR(-ENODEV);
-	}
 
 	mutex_lock(&con_mutex);
 
-	if (of_parse_phandle_with_args(dev->of_node, "mboxes",
-				       "#mbox-cells", index, &spec)) {
-		dev_dbg(dev, "%s: can't parse \"mboxes\" property\n", __func__);
-		mutex_unlock(&con_mutex);
-		return ERR_PTR(-ENODEV);
-	}
-
-	chan = ERR_PTR(-EPROBE_DEFER);
-	list_for_each_entry(mbox, &mbox_cons, node)
-		if (mbox->dev->of_node == spec.np) {
-			chan = mbox->of_xlate(mbox, &spec);
-			if (!IS_ERR(chan))
-				break;
-		}
-
-	of_node_put(spec.np);
+	chan = mbox_parse_chan(dev, index);
 
 	if (IS_ERR(chan)) {
 		mutex_unlock(&con_mutex);
 		return chan;
 	}
 
-	ret = __mbox_bind_client(chan, cl);
-	if (ret)
-		chan = ERR_PTR(ret);
+	if (IS_ERR_OR_NULL(chan) || chan->cl ||
+	    !try_module_get(chan->mbox->dev->driver->owner)) {
+		dev_err(dev, "%s: mailbox not free\n", __func__);
+		mutex_unlock(&con_mutex);
+		return ERR_PTR(-EBUSY);
+	}
+
+	spin_lock_irqsave(&chan->lock, flags);
+	chan->msg_free = 0;
+	chan->msg_count = 0;
+	chan->active_req = NULL;
+	chan->cl = cl;
+	init_completion(&chan->tx_complete);
+
+	if (chan->txdone_method	== TXDONE_BY_POLL && cl->knows_txdone)
+		chan->txdone_method = TXDONE_BY_ACK;
+
+	spin_unlock_irqrestore(&chan->lock, flags);
+
+	if (chan->mbox->ops->startup) {
+		ret = chan->mbox->ops->startup(chan);
+
+		if (ret) {
+			dev_err(dev, "Unable to startup the chan (%d)\n", ret);
+			mbox_free_channel(chan);
+			chan = ERR_PTR(ret);
+		}
+	}
 
 	mutex_unlock(&con_mutex);
 	return chan;
 }
 EXPORT_SYMBOL_GPL(mbox_request_channel);
 
+#define MBOX_REQ_NUM_MAX (8)
 struct mbox_chan *mbox_request_channel_byname(struct mbox_client *cl,
 					      const char *name)
 {
-	struct device_node *np = cl->dev->of_node;
-	struct property *prop;
-	const char *mbox_name;
+	const char *mbox_name[MBOX_REQ_NUM_MAX];
 	int index = 0;
+	int avail_cnt;
 
-	if (!np) {
-		dev_err(cl->dev, "%s() currently only supports DT\n", __func__);
-		return ERR_PTR(-EINVAL);
-	}
-
-	if (!of_get_property(np, "mbox-names", NULL)) {
+	avail_cnt = device_property_read_string_array(cl->dev, "mbox-names",
+						      mbox_name,
+						      MBOX_REQ_NUM_MAX);
+	if (avail_cnt < 0) {
 		dev_err(cl->dev,
 			"%s() requires an \"mbox-names\" property\n", __func__);
 		return ERR_PTR(-EINVAL);
 	}
 
-	of_property_for_each_string(np, "mbox-names", prop, mbox_name) {
-		if (!strncmp(name, mbox_name, strlen(name)))
+	for (index = 0; index < avail_cnt; index++) {
+		if (!strncmp(name, mbox_name[index], strlen(name)))
 			return mbox_request_channel(cl, index);
-		index++;
 	}
 
 	dev_err(cl->dev, "%s() could not locate channel named \"%s\"\n",
@@ -505,10 +552,10 @@ void mbox_free_channel(struct mbox_chan *chan)
 EXPORT_SYMBOL_GPL(mbox_free_channel);
 
 static struct mbox_chan *
-of_mbox_index_xlate(struct mbox_controller *mbox,
-		    const struct of_phandle_args *sp)
+fwnode_mbox_index_xlate(struct mbox_controller *mbox,
+		      const struct fwnode_reference_args *fwnode_args)
 {
-	int ind = sp->args[0];
+	int ind = fwnode_args->args[0];
 
 	if (ind >= mbox->num_chans)
 		return ERR_PTR(-EINVAL);
@@ -559,8 +606,8 @@ int mbox_controller_register(struct mbox_controller *mbox)
 		spin_lock_init(&chan->lock);
 	}
 
-	if (!mbox->of_xlate)
-		mbox->of_xlate = of_mbox_index_xlate;
+	if (!mbox->fwnode_xlate)
+		mbox->fwnode_xlate = fwnode_mbox_index_xlate;
 
 	mutex_lock(&con_mutex);
 	list_add_tail(&mbox->node, &mbox_cons);

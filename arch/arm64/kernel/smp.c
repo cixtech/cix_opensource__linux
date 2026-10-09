@@ -24,6 +24,7 @@
 #include <linux/smp.h>
 #include <linux/seq_file.h>
 #include <linux/irq.h>
+#include <linux/nmi.h>
 #include <linux/irqchip/arm-gic-v3.h>
 #include <linux/percpu.h>
 #include <linux/clockchips.h>
@@ -73,10 +74,11 @@ enum ipi_msg_type {
 	IPI_TIMER,
 	IPI_IRQ_WORK,
 	IPI_WAKEUP,
+	IPI_CPU_BACKTRACE,
 	NR_IPI
 };
 
-static int ipi_irq_base __read_mostly;
+int ipi_irq_base __read_mostly;
 static int nr_ipi __read_mostly = NR_IPI;
 static struct irq_desc *ipi_desc[NR_IPI] __read_mostly;
 
@@ -257,6 +259,7 @@ asmlinkage notrace void secondary_start_kernel(void)
 	complete(&cpu_running);
 
 	local_daif_restore(DAIF_PROCCTX);
+	local_irq_enable_full();
 
 	/*
 	 * OK, it's off to the idle thread for us
@@ -767,9 +770,12 @@ static const char *ipi_types[NR_IPI] __tracepoint_string = {
 	[IPI_TIMER]		= "Timer broadcast interrupts",
 	[IPI_IRQ_WORK]		= "IRQ work interrupts",
 	[IPI_WAKEUP]		= "CPU wake-up interrupts",
+	[IPI_CPU_BACKTRACE]	= "Backtrace interrupts",
 };
 
 static void smp_cross_call(const struct cpumask *target, unsigned int ipinr);
+
+static unsigned int get_ipi_count(struct irq_desc *desc, unsigned int cpu);
 
 unsigned long irq_err_count;
 
@@ -781,7 +787,7 @@ int arch_show_interrupts(struct seq_file *p, int prec)
 		seq_printf(p, "%*s%u:%s", prec - 1, "IPI", i,
 			   prec >= 4 ? " " : "");
 		for_each_online_cpu(cpu)
-			seq_printf(p, "%10u ", irq_desc_kstat_cpu(ipi_desc[i], cpu));
+			seq_printf(p, "%10u ", get_ipi_count(ipi_desc[i], cpu));
 		seq_printf(p, "      %s\n", ipi_types[i]);
 	}
 
@@ -813,8 +819,19 @@ void arch_irq_work_raise(void)
 }
 #endif
 
+/*
+ *  Don't need to call show_extra_register_data when cpu handling IPI_STOP.
+ *  Declared in <asm/smp.h>
+ */
+unsigned int g_cpu_in_ipi_stop;
 static void __noreturn local_cpu_stop(void)
 {
+	unsigned int mask;
+
+	mask = 0x1 << get_cpu();
+	g_cpu_in_ipi_stop |= mask;
+	put_cpu();
+
 	set_cpu_online(smp_processor_id(), false);
 
 	local_daif_mask();
@@ -843,7 +860,7 @@ static void __noreturn ipi_cpu_crash_stop(unsigned int cpu, struct pt_regs *regs
 
 	atomic_dec(&waiting_for_crash_ipi);
 
-	local_irq_disable();
+	local_irq_disable_full();
 	sdei_mask_local_cpu();
 
 	if (IS_ENABLED(CONFIG_HOTPLUG_CPU))
@@ -857,7 +874,7 @@ static void __noreturn ipi_cpu_crash_stop(unsigned int cpu, struct pt_regs *regs
 }
 
 /*
- * Main handler for inter-processor interrupts
+ * Main handler for inter-processor interrupts on the in-band stage.
  */
 static void do_handle_IPI(int ipinr)
 {
@@ -906,7 +923,11 @@ static void do_handle_IPI(int ipinr)
 			  cpu);
 		break;
 #endif
-
+	case IPI_CPU_BACKTRACE:
+		printk_deferred_enter();
+		nmi_cpu_backtrace(get_irq_regs());
+		printk_deferred_exit();
+		break;
 	default:
 		pr_crit("CPU%u: Unknown IPI message 0x%x\n", cpu, ipinr);
 		break;
@@ -916,6 +937,74 @@ static void do_handle_IPI(int ipinr)
 		trace_ipi_exit(ipi_types[ipinr]);
 }
 
+static void __smp_cross_call(const struct cpumask *target, unsigned int ipinr)
+{
+	trace_ipi_raise(target, ipi_types[ipinr]);
+	__ipi_send_mask(ipi_desc[ipinr], target);
+}
+
+#ifdef CONFIG_IRQ_PIPELINE
+
+static DEFINE_PER_CPU(unsigned long, ipi_messages);
+
+static DEFINE_PER_CPU(unsigned int [NR_IPI], ipi_counts);
+
+static irqreturn_t ipi_handler(int irq, void *data)
+{
+	unsigned long *pmsg;
+	unsigned int ipinr;
+
+	/*
+	 * Decode in-band IPIs (0..NR_IPI - 1) multiplexed over
+	 * SGI0. Out-of-band IPIs (SGI1, SGI2) have their own
+	 * individual handler.
+	 */
+	pmsg = raw_cpu_ptr(&ipi_messages);
+	while (*pmsg) {
+		ipinr = ffs(*pmsg) - 1;
+		clear_bit(ipinr, pmsg);
+		__this_cpu_inc(ipi_counts[ipinr]);
+		do_handle_IPI(ipinr);
+	}
+
+	return IRQ_HANDLED;
+}
+
+static void smp_cross_call(const struct cpumask *target, unsigned int ipinr)
+{
+	unsigned int cpu;
+
+	/* regular in-band IPI (multiplexed over SGI0). */
+	for_each_cpu(cpu, target)
+		set_bit(ipinr, &per_cpu(ipi_messages, cpu));
+
+	wmb();
+	__smp_cross_call(target, 0);
+}
+
+static unsigned int get_ipi_count(struct irq_desc *desc, unsigned int cpu)
+{
+	unsigned int irq = irq_desc_get_irq(desc);
+	return per_cpu(ipi_counts[irq - ipi_irq_base], cpu);
+}
+
+void irq_send_oob_ipi(unsigned int irq,
+		const struct cpumask *cpumask)
+{
+	unsigned int sgi = irq - ipi_irq_base;
+
+	if (WARN_ON(irq_pipeline_debug() &&
+		    (sgi < OOB_IPI_OFFSET ||
+		     sgi >= OOB_IPI_OFFSET + OOB_NR_IPI)))
+		return;
+
+	/* Out-of-band IPI (SGI1-2). */
+	__smp_cross_call(cpumask, sgi);
+}
+EXPORT_SYMBOL_GPL(irq_send_oob_ipi);
+
+#else
+
 static irqreturn_t ipi_handler(int irq, void *data)
 {
 	do_handle_IPI(irq - ipi_irq_base);
@@ -924,9 +1013,15 @@ static irqreturn_t ipi_handler(int irq, void *data)
 
 static void smp_cross_call(const struct cpumask *target, unsigned int ipinr)
 {
-	trace_ipi_raise(target, ipi_types[ipinr]);
-	__ipi_send_mask(ipi_desc[ipinr], target);
+	__smp_cross_call(target, ipinr);
 }
+
+static unsigned int get_ipi_count(struct irq_desc *desc, unsigned int cpu)
+{
+	return irq_desc_kstat_cpu(desc, cpu);
+}
+
+#endif /* CONFIG_IRQ_PIPELINE */
 
 static void ipi_setup(int cpu)
 {
@@ -954,18 +1049,25 @@ static void ipi_teardown(int cpu)
 
 void __init set_smp_ipi_range(int ipi_base, int n)
 {
-	int i;
+	int i, inband_nr_ipi;
 
 	WARN_ON(n < NR_IPI);
 	nr_ipi = min(n, NR_IPI);
+	/*
+	 * irq_pipeline: the in-band stage traps SGI0 only,
+	 * over which IPI messages are mutiplexed. Other SGIs
+	 * are available for delivering out-of-band IPIs.
+	 */
+	inband_nr_ipi = irqs_pipelined() ? 1 : nr_ipi;
 
 	for (i = 0; i < nr_ipi; i++) {
-		int err;
+		if (i < inband_nr_ipi) {
+			int err;
 
-		err = request_percpu_irq(ipi_base + i, ipi_handler,
-					 "IPI", &cpu_number);
-		WARN_ON(err);
-
+			err = request_percpu_irq(ipi_base + i, ipi_handler,
+						"IPI", &cpu_number);
+			WARN_ON(err);
+		}
 		ipi_desc[i] = irq_to_desc(ipi_base + i);
 		irq_set_status_flags(ipi_base + i, IRQ_HIDDEN);
 	}
@@ -1095,4 +1197,14 @@ bool cpus_are_stuck_in_kernel(void)
 
 	return !!cpus_stuck_in_kernel || smp_spin_tables ||
 		is_protected_kvm_enabled();
+}
+
+static void raise_nmi(cpumask_t *mask)
+{
+	smp_cross_call(mask, IPI_CPU_BACKTRACE);
+}
+
+void arch_trigger_cpumask_backtrace(const cpumask_t *mask, bool exclude_self)
+{
+	nmi_trigger_cpumask_backtrace(mask, exclude_self, raise_nmi);
 }

@@ -184,6 +184,12 @@ static int simple_parse_node(struct asoc_simple_priv *priv,
 	if (ret)
 		return ret;
 
+	ret = asoc_simple_parse_pa(dev, np, dai);
+	if (ret)
+		return ret;
+
+	asoc_simple_parse_jack(np, dai);
+
 	return 0;
 }
 

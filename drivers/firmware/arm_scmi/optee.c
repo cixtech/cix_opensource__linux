@@ -328,12 +328,15 @@ static int scmi_optee_link_supplier(struct device *dev)
 	return 0;
 }
 
-static bool scmi_optee_chan_available(struct device_node *of_node, int idx)
+static bool scmi_optee_chan_available(struct fwnode_handle *fwnode, int idx)
 {
-	u32 channel_id;
+	int count;
 
-	return !of_property_read_u32_index(of_node, "linaro,optee-channel-id",
-					   idx, &channel_id);
+	count = fwnode_property_count_u32(fwnode, "linaro,optee-channel-id");
+	if (idx >= count)
+		return false;
+	else 
+		return true;
 }
 
 static void scmi_optee_clear_channel(struct scmi_chan_info *cinfo)

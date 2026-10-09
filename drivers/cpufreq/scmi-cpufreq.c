@@ -20,6 +20,7 @@
 #include <linux/scmi_protocol.h>
 #include <linux/types.h>
 #include <linux/units.h>
+#include <linux/arm-smccc.h>
 
 struct scmi_data {
 	int domain_id;
@@ -30,6 +31,10 @@ struct scmi_data {
 
 static struct scmi_protocol_handle *ph;
 static const struct scmi_perf_proto_ops *perf_ops;
+
+#ifdef CONFIG_DVFS_BOARD_CHECK
+#define CIX_SIP_CPUFREQ_SUPPORT       0xc200000d
+#endif
 
 static unsigned int scmi_cpufreq_get_rate(unsigned int cpu)
 {
@@ -298,6 +303,25 @@ static struct cpufreq_driver scmi_cpufreq_driver = {
 	.exit	= scmi_cpufreq_exit,
 	.register_em	= scmi_cpufreq_register_em,
 };
+#ifdef CONFIG_DVFS_BOARD_CHECK
+static int check_cpufreq_support(void)
+{
+	struct arm_smccc_res res;
+	bool board_support;
+
+	arm_smccc_smc(CIX_SIP_CPUFREQ_SUPPORT, 0, 0, 0, 0, 0, 0, 0, &res);
+
+	if (res.a0)
+		board_support = false;
+	else
+		board_support = true;
+
+	if (!board_support)
+		pr_info("This board not supports cpu dvfs");
+
+	return board_support;
+}
+#endif
 
 static int scmi_cpufreq_probe(struct scmi_device *sdev)
 {
@@ -306,6 +330,15 @@ static int scmi_cpufreq_probe(struct scmi_device *sdev)
 	const struct scmi_handle *handle;
 
 	handle = sdev->handle;
+
+	if (!dev->of_node)
+		return -ENODEV;
+
+#ifdef CONFIG_DVFS_BOARD_CHECK
+	ret = check_cpufreq_support();
+	if (!ret)
+		return -EINVAL;
+#endif
 
 	if (!handle)
 		return -ENODEV;

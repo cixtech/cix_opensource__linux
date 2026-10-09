@@ -24,6 +24,9 @@
 #include <linux/seq_file.h>
 #include <linux/idr.h>
 #include <linux/uio.h>
+#ifdef CONFIG_PLAT_FDLEAK
+#include <linux/soc/cix/dst_fdleak.h>
+#endif
 
 static DEFINE_IDA(eventfd_ida);
 
@@ -124,6 +127,9 @@ static int eventfd_release(struct inode *inode, struct file *file)
 
 	wake_up_poll(&ctx->wqh, EPOLLHUP);
 	eventfd_ctx_put(ctx);
+#ifdef CONFIG_PLAT_FDLEAK
+	fdleak_report(FDLEAK_WP_EVENTFD, 1);
+#endif
 	return 0;
 }
 
@@ -256,16 +262,16 @@ static ssize_t eventfd_read(struct kiocb *iocb, struct iov_iter *to)
 	return sizeof(ucnt);
 }
 
-static ssize_t eventfd_write(struct file *file, const char __user *buf, size_t count,
-			     loff_t *ppos)
+static ssize_t eventfd_write(struct kiocb *iocb, struct iov_iter *from)
 {
+	struct file *file = iocb->ki_filp;
 	struct eventfd_ctx *ctx = file->private_data;
 	ssize_t res;
 	__u64 ucnt;
 
-	if (count < sizeof(ucnt))
+	if (iov_iter_count(from) < sizeof(ucnt))
 		return -EINVAL;
-	if (copy_from_user(&ucnt, buf, sizeof(ucnt)))
+	if (copy_from_iter(&ucnt, sizeof(ucnt), from) != sizeof(ucnt))
 		return -EFAULT;
 	if (ucnt == ULLONG_MAX)
 		return -EINVAL;
@@ -313,7 +319,7 @@ static const struct file_operations eventfd_fops = {
 	.release	= eventfd_release,
 	.poll		= eventfd_poll,
 	.read_iter	= eventfd_read,
-	.write		= eventfd_write,
+	.write_iter	= eventfd_write,
 	.llseek		= noop_llseek,
 };
 
@@ -424,6 +430,9 @@ static int do_eventfd(unsigned int count, int flags)
 
 	file->f_mode |= FMODE_NOWAIT;
 	fd_install(fd, file);
+#ifdef CONFIG_PLAT_FDLEAK
+	fdleak_report(FDLEAK_WP_EVENTFD, 0);
+#endif
 	return fd;
 err:
 	eventfd_free_ctx(ctx);

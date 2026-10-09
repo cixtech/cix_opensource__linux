@@ -75,14 +75,16 @@ static irqreturn_t smc_msg_done_isr(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static bool smc_chan_available(struct device_node *of_node, int idx)
+static bool smc_chan_available(struct fwnode_handle *fwnode, int idx)
 {
-	struct device_node *np = of_parse_phandle(of_node, "shmem", 0);
-	if (!np)
-		return false;
+	struct fwnode_handle *ref_fwnode;
 
-	of_node_put(np);
-	return true;
+	ref_fwnode = fwnode_find_reference(fwnode, "shmem", 0);
+	if (!IS_ERR_OR_NULL(ref_fwnode)) {
+		fwnode_handle_put(ref_fwnode);
+		return true;
+	}
+	return false;
 }
 
 static inline void smc_channel_lock_init(struct scmi_smc *scmi_info)

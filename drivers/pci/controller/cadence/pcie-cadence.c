@@ -8,6 +8,78 @@
 
 #include "pcie-cadence.h"
 
+static u8 __cdns_pcie_find_next_cap(void __iomem *addr, u8 cap_ptr, u8 cap)
+{
+	u8 cap_id, next_cap_ptr;
+	u16 reg;
+
+	if (!cap_ptr)
+		return 0;
+
+	reg = readl(addr + cap_ptr);
+	cap_id = (reg & 0x00ff);
+
+	if (cap_id > PCI_CAP_ID_MAX)
+		return 0;
+
+	if (cap_id == cap)
+		return cap_ptr;
+
+	next_cap_ptr = (reg & 0xff00) >> 8;
+	return __cdns_pcie_find_next_cap(addr, next_cap_ptr, cap);
+}
+
+u8 cdns_pcie_find_capability(void __iomem *addr, u8 cap)
+{
+	u8 next_cap_ptr;
+	u16 reg;
+
+	reg = readl(addr + PCI_CAPABILITY_LIST);
+	next_cap_ptr = (reg & 0x00ff);
+
+	return __cdns_pcie_find_next_cap(addr, next_cap_ptr, cap);
+}
+
+static u16 cdns_pcie_find_next_ext_capability(void __iomem *addr, u16 start,
+					      u8 cap)
+{
+	u32 header;
+	int ttl;
+	int pos = PCI_CFG_SPACE_SIZE;
+
+	/* minimum 8 bytes per capability */
+	ttl = (PCI_CFG_SPACE_EXP_SIZE - PCI_CFG_SPACE_SIZE) / 8;
+
+	if (start)
+		pos = start;
+
+	header = readl(addr + pos);
+	/*
+	 * If we have no capabilities, this is indicated by cap ID,
+	 * cap version and next pointer all being 0.
+	 */
+	if (header == 0)
+		return 0;
+
+	while (ttl-- > 0) {
+		if (PCI_EXT_CAP_ID(header) == cap && pos != start)
+			return pos;
+
+		pos = PCI_EXT_CAP_NEXT(header);
+		if (pos < PCI_CFG_SPACE_SIZE)
+			break;
+
+		header = readl(addr + pos);
+	}
+
+	return 0;
+}
+
+u16 cdns_pcie_find_ext_capability(void __iomem *addr, u8 cap)
+{
+	return cdns_pcie_find_next_ext_capability(addr, 0, cap);
+}
+
 void cdns_pcie_detect_quiet_min_delay_set(struct cdns_pcie *pcie)
 {
 	u32 delay = 0x3;
@@ -16,12 +88,12 @@ void cdns_pcie_detect_quiet_min_delay_set(struct cdns_pcie *pcie)
 	/*
 	 * Set the LTSSM Detect Quiet state min. delay to 2ms.
 	 */
-	ltssm_control_cap = cdns_pcie_readl(pcie, CDNS_PCIE_LTSSM_CONTROL_CAP);
+	ltssm_control_cap = cdns_pcie_readl(pcie, CDNS_PCIE_PHY_LAYER_CFG0);
 	ltssm_control_cap = ((ltssm_control_cap &
 			    ~CDNS_PCIE_DETECT_QUIET_MIN_DELAY_MASK) |
 			    CDNS_PCIE_DETECT_QUIET_MIN_DELAY(delay));
 
-	cdns_pcie_writel(pcie, CDNS_PCIE_LTSSM_CONTROL_CAP, ltssm_control_cap);
+	cdns_pcie_writel(pcie, CDNS_PCIE_PHY_LAYER_CFG0, ltssm_control_cap);
 }
 
 void cdns_pcie_set_outbound_region(struct cdns_pcie *pcie, u8 busnr, u8 fn,
@@ -34,7 +106,7 @@ void cdns_pcie_set_outbound_region(struct cdns_pcie *pcie, u8 busnr, u8 fn,
 	 */
 	u64 sz = 1ULL << fls64(size - 1);
 	int nbits = ilog2(sz);
-	u32 addr0, addr1, desc0, desc1;
+	u32 addr0, addr1, desc0, desc1, ctrl0;
 
 	if (nbits < 8)
 		nbits = 8;
@@ -55,35 +127,36 @@ void cdns_pcie_set_outbound_region(struct cdns_pcie *pcie, u8 busnr, u8 fn,
 	desc1 = 0;
 
 	/*
-	 * Whatever Bit [23] is set or not inside DESC0 register of the outbound
+	 * Whatever Bit [26] is set or not inside CTRL0 register of the outbound
 	 * PCIe descriptor, the PCI function number must be set into
-	 * Bits [26:24] of DESC0 anyway.
+	 * Bits [31:24] of DESC1 anyway.
 	 *
 	 * In Root Complex mode, the function number is always 0 but in Endpoint
 	 * mode, the PCIe controller may support more than one function. This
 	 * function number needs to be set properly into the outbound PCIe
 	 * descriptor.
 	 *
-	 * Besides, setting Bit [23] is mandatory when in Root Complex mode:
+	 * Besides, setting Bit [26] is mandatory when in Root Complex mode:
 	 * then the driver must provide the bus, resp. device, number in
-	 * Bits [7:0] of DESC1, resp. Bits[31:27] of DESC0. Like the function
+	 * Bits [31:24] of DESC1, resp. Bits[23:16] of DESC1. Like the function
 	 * number, the device number is always 0 in Root Complex mode.
 	 *
-	 * However when in Endpoint mode, we can clear Bit [23] of DESC0, hence
+	 * However when in Endpoint mode, we can clear Bit [26] of CTRL0, hence
 	 * the PCIe controller will use the captured values for the bus and
 	 * device numbers.
 	 */
 	if (pcie->is_rc) {
 		/* The device and function numbers are always 0. */
-		desc0 |= CDNS_PCIE_AT_OB_REGION_DESC0_HARDCODED_RID |
-			 CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN(0);
-		desc1 |= CDNS_PCIE_AT_OB_REGION_DESC1_BUS(busnr);
+		desc1 = CDNS_PCIE_AT_OB_REGION_DESC1_BUS(busnr) |
+			CDNS_PCIE_AT_OB_REGION_DESC1_DEVFN(0);
+		ctrl0 = CDNS_PCIE_AT_OB_REGION_CTRL0_SUPPLY_BUS |
+			CDNS_PCIE_AT_OB_REGION_CTRL0_SUPPLY_DEV_FN;
 	} else {
 		/*
 		 * Use captured values for bus and device numbers but still
 		 * need to set the function number.
 		 */
-		desc0 |= CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN(fn);
+		desc1 |= CDNS_PCIE_AT_OB_REGION_DESC1_DEVFN(fn);
 	}
 
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_DESC0(r), desc0);
@@ -99,24 +172,26 @@ void cdns_pcie_set_outbound_region(struct cdns_pcie *pcie, u8 busnr, u8 fn,
 
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CPU_ADDR0(r), addr0);
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CPU_ADDR1(r), addr1);
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CTRL0(r), ctrl0);
 }
 
 void cdns_pcie_set_outbound_region_for_normal_msg(struct cdns_pcie *pcie,
 						  u8 busnr, u8 fn,
 						  u32 r, u64 cpu_addr)
 {
-	u32 addr0, addr1, desc0, desc1;
+	u32 addr0, addr1, desc0, desc1, ctrl0;
 
 	desc0 = CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_NORMAL_MSG;
 	desc1 = 0;
 
 	/* See cdns_pcie_set_outbound_region() comments above. */
 	if (pcie->is_rc) {
-		desc0 |= CDNS_PCIE_AT_OB_REGION_DESC0_HARDCODED_RID |
-			 CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN(0);
-		desc1 |= CDNS_PCIE_AT_OB_REGION_DESC1_BUS(busnr);
+		desc1 = CDNS_PCIE_AT_OB_REGION_DESC1_BUS(busnr) |
+			CDNS_PCIE_AT_OB_REGION_DESC1_DEVFN(0);
+		ctrl0 = CDNS_PCIE_AT_OB_REGION_CTRL0_SUPPLY_BUS |
+			CDNS_PCIE_AT_OB_REGION_CTRL0_SUPPLY_DEV_FN;
 	} else {
-		desc0 |= CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN(fn);
+		desc1 |= CDNS_PCIE_AT_OB_REGION_DESC1_DEVFN(fn);
 	}
 
 	/* Set the CPU address */
@@ -133,6 +208,7 @@ void cdns_pcie_set_outbound_region_for_normal_msg(struct cdns_pcie *pcie,
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_DESC1(r), desc1);
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CPU_ADDR0(r), addr0);
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CPU_ADDR1(r), addr1);
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CTRL0(r), ctrl0);
 }
 
 void cdns_pcie_reset_outbound_region(struct cdns_pcie *pcie, u32 r)

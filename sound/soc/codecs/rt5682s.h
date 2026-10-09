@@ -1374,7 +1374,7 @@
 #define RT5682S_CP_SW_SIZE_M			(0x2 << 4)
 #define RT5682S_CP_SW_SIZE_S			(0x1 << 4)
 
-#define RT5682S_STEREO_RATES SNDRV_PCM_RATE_8000_192000
+#define RT5682S_STEREO_RATES (SNDRV_PCM_RATE_8000_96000 | SNDRV_PCM_RATE_176400)
 #define RT5682S_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE | \
 		SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S8)
 
@@ -1477,6 +1477,8 @@ struct rt5682s_priv {
 	unsigned int irq;
 	int irq_work_delay_time;
 	int wclk_enabled;
+
+	struct gpio_desc *ldo1_gpiod;
 };
 
 int rt5682s_sel_asrc_clk_src(struct snd_soc_component *component,

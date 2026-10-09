@@ -21,7 +21,7 @@ static u64 bar_max_size[] = {
 };
 
 static u8 bar_aperture_mask[] = {
-	[RP_BAR0] = 0x1F,
+	[RP_BAR0] = 0xF,
 	[RP_BAR1] = 0xF,
 };
 
@@ -32,7 +32,7 @@ void __iomem *cdns_pci_map_bus(struct pci_bus *bus, unsigned int devfn,
 	struct cdns_pcie_rc *rc = pci_host_bridge_priv(bridge);
 	struct cdns_pcie *pcie = &rc->pcie;
 	unsigned int busn = bus->number;
-	u32 addr0, desc0;
+	u32 addr0, desc0, desc1, ctrl0;
 
 	if (pci_is_root_bus(bus)) {
 		/*
@@ -46,10 +46,13 @@ void __iomem *cdns_pci_map_bus(struct pci_bus *bus, unsigned int devfn,
 		return pcie->reg_base + (where & 0xfff);
 	}
 	/* Check that the link is up */
-	if (!(cdns_pcie_readl(pcie, CDNS_PCIE_LM_BASE) & 0x1))
+
+	if (!(cdns_pcie_readl(pcie, CDNS_PCIE_IP_REG_BANK_BASE) & 0x1))
 		return NULL;
+
 	/* Clear AXI link-down status */
-	cdns_pcie_writel(pcie, CDNS_PCIE_AT_LINKDOWN, 0x0);
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_LINKDOWN,
+			cdns_pcie_readl(pcie, CDNS_PCIE_AT_LINKDOWN) & 0xe);
 
 	/* Update Output registers for AXI region 0. */
 	addr0 = CDNS_PCIE_AT_OB_REGION_PCI_ADDR0_NBITS(12) |
@@ -58,8 +61,12 @@ void __iomem *cdns_pci_map_bus(struct pci_bus *bus, unsigned int devfn,
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_PCI_ADDR0(0), addr0);
 
 	/* Configuration Type 0 or Type 1 access. */
-	desc0 = CDNS_PCIE_AT_OB_REGION_DESC0_HARDCODED_RID |
-		CDNS_PCIE_AT_OB_REGION_DESC0_DEVFN(0);
+	desc1 = cdns_pcie_readl(pcie, CDNS_PCIE_AT_OB_REGION_DESC1(0));
+	desc1 &= ~CDNS_PCIE_AT_OB_REGION_DESC1_DEVFN_MASK;
+	desc1 |= CDNS_PCIE_AT_OB_REGION_DESC1_DEVFN(0);
+	ctrl0 = CDNS_PCIE_AT_OB_REGION_CTRL0_SUPPLY_BUS |
+		CDNS_PCIE_AT_OB_REGION_CTRL0_SUPPLY_DEV_FN;
+
 	/*
 	 * The bus number was already set once for all in desc1 by
 	 * cdns_pcie_host_init_address_translation().
@@ -69,6 +76,8 @@ void __iomem *cdns_pci_map_bus(struct pci_bus *bus, unsigned int devfn,
 	else
 		desc0 |= CDNS_PCIE_AT_OB_REGION_DESC0_TYPE_CONF_TYPE1;
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_DESC0(0), desc0);
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_DESC1(0), desc1);
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CTRL0(0), ctrl0);
 
 	return rc->cfg_base + (where & 0xfff);
 }
@@ -111,9 +120,12 @@ static int cdns_pcie_host_wait_for_link(struct cdns_pcie *pcie)
 			dev_info(dev, "Link up\n");
 			return 0;
 		}
-		usleep_range(LINK_WAIT_USLEEP_MIN, LINK_WAIT_USLEEP_MAX);
+		if (pcie->plat_emu)
+			udelay(30);
+		else
+			usleep_range(LINK_WAIT_USLEEP_MIN, LINK_WAIT_USLEEP_MAX);
 	}
-
+	dev_info(dev, "Link fail, retries %d times\n", retries);
 	return -ETIMEDOUT;
 }
 
@@ -164,14 +176,14 @@ static int cdns_pcie_host_start_link(struct cdns_pcie_rc *rc)
 	int ret;
 
 	ret = cdns_pcie_host_wait_for_link(pcie);
-
+	dev_info(rc->pcie.dev, "ret=%d, rc->quirk_retrain_flag = %d \n", ret, rc->quirk_retrain_flag);
 	/*
 	 * Retrain link for Gen2 training defect
 	 * if quirk flag is set.
 	 */
 	if (!ret && rc->quirk_retrain_flag)
 		ret = cdns_pcie_retrain(pcie);
-
+	dev_info(rc->pcie.dev, "ret=%d, rc->quirk_retrain_flag = %d \n", ret, rc->quirk_retrain_flag);
 	return ret;
 }
 
@@ -204,6 +216,9 @@ static int cdns_pcie_host_init_root_port(struct cdns_pcie_rc *rc)
 			CDNS_PCIE_LM_ID_SUBSYS(rc->vendor_id);
 		cdns_pcie_writel(pcie, CDNS_PCIE_LM_ID, id);
 	}
+
+	if (rc->vendor_id != 0xffff)
+		cdns_pcie_rp_writew(pcie, PCI_VENDOR_ID, rc->vendor_id);
 
 	if (rc->device_id != 0xffff)
 		cdns_pcie_rp_writew(pcie, PCI_DEVICE_ID, rc->device_id);
@@ -243,7 +258,7 @@ static int cdns_pcie_host_bar_ib_config(struct cdns_pcie_rc *rc,
 		   LM_RC_BAR_CFG_CTRL_PREF_MEM_64BITS(bar) |
 		   LM_RC_BAR_CFG_CTRL_MEM_32BITS(bar) |
 		   LM_RC_BAR_CFG_CTRL_PREF_MEM_32BITS(bar) |
-		   LM_RC_BAR_CFG_APERTURE(bar, bar_aperture_mask[bar] + 2));
+		   LM_RC_BAR_CFG_APERTURE(bar, bar_aperture_mask[bar] + 7));
 	if (size + cpu_addr >= SZ_4G) {
 		if (!(flags & IORESOURCE_PREFETCH))
 			value |= LM_RC_BAR_CFG_CTRL_MEM_64BITS(bar);
@@ -385,17 +400,16 @@ static int cdns_pcie_host_dma_ranges_cmp(void *priv, const struct list_head *a,
 {
 	struct resource_entry *entry1, *entry2;
 
-        entry1 = container_of(a, struct resource_entry, node);
-        entry2 = container_of(b, struct resource_entry, node);
+	entry1 = container_of(a, struct resource_entry, node);
+	entry2 = container_of(b, struct resource_entry, node);
 
-        return resource_size(entry2->res) - resource_size(entry1->res);
+	return resource_size(entry2->res) - resource_size(entry1->res);
 }
 
 static int cdns_pcie_host_map_dma_ranges(struct cdns_pcie_rc *rc)
 {
 	struct cdns_pcie *pcie = &rc->pcie;
 	struct device *dev = pcie->dev;
-	struct device_node *np = dev->of_node;
 	struct pci_host_bridge *bridge;
 	struct resource_entry *entry;
 	u32 no_bar_nbits = 32;
@@ -406,7 +420,7 @@ static int cdns_pcie_host_map_dma_ranges(struct cdns_pcie_rc *rc)
 		return -ENOMEM;
 
 	if (list_empty(&bridge->dma_ranges)) {
-		of_property_read_u32(np, "cdns,no-bar-match-nbits",
+		device_property_read_u32(dev, "cdns,no-bar-match-nbits",
 				     &no_bar_nbits);
 		err = cdns_pcie_host_bar_ib_config(rc, RP_NO_BAR, 0x0,
 						   (u64)1 << no_bar_nbits, 0);
@@ -414,7 +428,6 @@ static int cdns_pcie_host_map_dma_ranges(struct cdns_pcie_rc *rc)
 			dev_err(dev, "IB BAR: %d config failed\n", RP_NO_BAR);
 		return err;
 	}
-
 	list_sort(NULL, &bridge->dma_ranges, cdns_pcie_host_dma_ranges_cmp);
 
 	resource_list_for_each_entry(entry, &bridge->dma_ranges) {
@@ -428,7 +441,82 @@ static int cdns_pcie_host_map_dma_ranges(struct cdns_pcie_rc *rc)
 	return 0;
 }
 
-static int cdns_pcie_host_init_address_translation(struct cdns_pcie_rc *rc)
+static int cdns_pcie_create_region_for_ecam(struct cdns_pcie_rc *rc)
+{
+	struct cdns_pcie *pcie = &rc->pcie;
+	struct pci_host_bridge *bridge = pci_host_bridge_from_priv(rc);
+	struct resource *cfg_res = rc->cfg_res;
+	struct resource_entry *entry;
+	resource_size_t size;
+	u64 sz;
+	int nbits;
+	int busnr = 0, secbus = 0, subbus = 0;
+	u32 value, root_port_req_id_reg, pcie_bus_number_reg;
+	u32 ecam_addr_0, region_size_0, request_id_0;
+	u32 axi_address_low;
+
+	entry = resource_list_first_type(&bridge->windows, IORESOURCE_BUS);
+	if (entry) {
+		busnr = entry->res->start;
+		secbus = (busnr < 0xff) ? (busnr + 1) : 0xff;
+		subbus = entry->res->end;
+	}
+	size = resource_size(cfg_res);
+	sz = 1ULL << fls64(size - 1);
+	nbits = ilog2(sz);
+	if (nbits < 8)
+		nbits = 8;
+
+	root_port_req_id_reg = ((busnr & 0xff) << 8);
+	pcie_bus_number_reg = ((subbus & 0xff) << 16) | ((secbus & 0xff) << 8) | (busnr & 0xff);
+	ecam_addr_0 = cfg_res->start;
+	region_size_0 = nbits - 1;
+	request_id_0 = ((busnr & 0xff) << 8);
+
+#define CDNS_PCIE_TAG_MANAGEMENT (CDNS_PCIE_AXI_SLAVE_OFFSET + 0x0)
+	cdns_pcie_writel(pcie, CDNS_PCIE_TAG_MANAGEMENT, 0x200000);
+
+	/* Taking slave err as OKAY */
+#define CDNS_PCIE_SLAVE_RESP (CDNS_PCIE_AXI_SLAVE_OFFSET + 0x100)
+	cdns_pcie_writel(pcie, CDNS_PCIE_SLAVE_RESP, 0x0);
+	cdns_pcie_writel(pcie, CDNS_PCIE_SLAVE_RESP + 0x4, 0x0);
+
+	/* Program the register “i_root_port_req_id_reg” with RP’s BDF */
+#define I_ROOT_PORT_REQ_ID_REG (CDNS_PCIE_IP_REG_BANK_BASE + 0x141c)
+	cdns_pcie_writel(pcie, I_ROOT_PORT_REQ_ID_REG, root_port_req_id_reg);
+
+	/* Program the register “i_pcie_bus_numbers” with Primary(RP’s bus number), secondary and subordinate bus numbers */
+#define I_PCIE_BUS_NUMBERS (CDNS_PCIE_RP_BASE + 0x18)
+	cdns_pcie_writel(pcie, I_PCIE_BUS_NUMBERS, pcie_bus_number_reg);
+
+	/* Program the register “lm_hal_sbsa_ctrl[0]” to enable the sbsa */
+#define LM_HAL_SBSA_CTRL (CDNS_PCIE_IP_REG_BANK_BASE + 0x1170)
+	value = cdns_pcie_readl(pcie, LM_HAL_SBSA_CTRL);
+	value |= BIT(0);
+	cdns_pcie_writel(pcie, LM_HAL_SBSA_CTRL, value);
+
+	/* Program region[0] for ECAM */
+	axi_address_low = (ecam_addr_0 & 0xfff00000) | region_size_0;
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CPU_ADDR0(0), axi_address_low);
+
+	/* rc0-high-axi-address */
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CPU_ADDR1(0), 0x0);
+	/* Type-1 CFG */
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_DESC0(0), 0x05000000);
+
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_DESC1(0), (request_id_0 << 16));
+
+	/* All AXI bits pass through PCIe */
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_PCI_ADDR0(0), 0x1b);
+	/* PCIe address-high */
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_PCI_ADDR1(0), 0);
+
+	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CTRL0(0), 0x06000000);
+
+	return 0;
+}
+
+static int cdns_pcie_create_region_for_cfg(struct cdns_pcie_rc *rc)
 {
 	struct cdns_pcie *pcie = &rc->pcie;
 	struct pci_host_bridge *bridge = pci_host_bridge_from_priv(rc);
@@ -436,7 +524,7 @@ static int cdns_pcie_host_init_address_translation(struct cdns_pcie_rc *rc)
 	struct resource_entry *entry;
 	u64 cpu_addr = cfg_res->start;
 	u32 addr0, addr1, desc1;
-	int r, busnr = 0;
+	int busnr = 0;
 
 	entry = resource_list_first_type(&bridge->windows, IORESOURCE_BUS);
 	if (entry)
@@ -461,7 +549,30 @@ static int cdns_pcie_host_init_address_translation(struct cdns_pcie_rc *rc)
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CPU_ADDR0(0), addr0);
 	cdns_pcie_writel(pcie, CDNS_PCIE_AT_OB_REGION_CPU_ADDR1(0), addr1);
 
+	return 0;
+}
+
+static int cdns_pcie_host_init_address_translation(struct cdns_pcie_rc *rc)
+{
+	struct cdns_pcie *pcie = &rc->pcie;
+	struct device *dev = pcie->dev;
+	struct pci_host_bridge *bridge = pci_host_bridge_from_priv(rc);
+	struct resource_entry *entry;
+	int r, busnr = 0;
+
+	if (rc->ecam_support_flag)
+		cdns_pcie_create_region_for_ecam(rc);
+	else
+		cdns_pcie_create_region_for_cfg(rc);
+
+	entry = resource_list_first_type(&bridge->windows, IORESOURCE_BUS);
+	if (entry)
+		busnr = entry->res->start;
+
 	r = 1;
+	cdns_pcie_set_outbound_region_for_normal_msg(pcie, busnr, 0, r, pcie->msg_res->start);
+
+	r = 2;
 	resource_list_for_each_entry(entry, &bridge->windows) {
 		struct resource *res = entry->res;
 		u64 pci_addr = res->start - entry->offset;
@@ -472,7 +583,7 @@ static int cdns_pcie_host_init_address_translation(struct cdns_pcie_rc *rc)
 						      pci_pio_to_address(res->start),
 						      pci_addr,
 						      resource_size(res));
-		else
+		else if (resource_type(res) == IORESOURCE_MEM)
 			cdns_pcie_set_outbound_region(pcie, busnr, 0, r,
 						      false,
 						      res->start,
@@ -482,7 +593,10 @@ static int cdns_pcie_host_init_address_translation(struct cdns_pcie_rc *rc)
 		r++;
 	}
 
-	return cdns_pcie_host_map_dma_ranges(rc);
+	if (device_property_read_bool(dev, "cdns,no-inbound-bar"))
+		return 0;
+	else
+		return cdns_pcie_host_map_dma_ranges(rc);
 }
 
 int cdns_pcie_host_init(struct cdns_pcie_rc *rc)
@@ -517,14 +631,13 @@ int cdns_pcie_host_link_setup(struct cdns_pcie_rc *rc)
 	if (ret)
 		dev_dbg(dev, "PCIe link never came up\n");
 
-	return 0;
+	return ret;
 }
 
 int cdns_pcie_host_setup(struct cdns_pcie_rc *rc)
 {
 	struct device *dev = rc->pcie.dev;
 	struct platform_device *pdev = to_platform_device(dev);
-	struct device_node *np = dev->of_node;
 	struct pci_host_bridge *bridge;
 	enum cdns_pcie_rp_bar bar;
 	struct cdns_pcie *pcie;
@@ -538,23 +651,29 @@ int cdns_pcie_host_setup(struct cdns_pcie_rc *rc)
 	pcie = &rc->pcie;
 	pcie->is_rc = true;
 
-	rc->vendor_id = 0xffff;
-	of_property_read_u32(np, "vendor-id", &rc->vendor_id);
-
-	rc->device_id = 0xffff;
-	of_property_read_u32(np, "device-id", &rc->device_id);
-
-	pcie->reg_base = devm_platform_ioremap_resource_byname(pdev, "reg");
-	if (IS_ERR(pcie->reg_base)) {
-		dev_err(dev, "missing \"reg\"\n");
-		return PTR_ERR(pcie->reg_base);
+	if ((rc->vendor_id==0)||(rc->vendor_id==0xffff)) {
+		device_property_read_u32(dev, "vendor-id", &rc->vendor_id);
 	}
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "cfg");
-	rc->cfg_base = devm_pci_remap_cfg_resource(dev, res);
-	if (IS_ERR(rc->cfg_base))
-		return PTR_ERR(rc->cfg_base);
-	rc->cfg_res = res;
+	if ((rc->device_id==0)||(rc->device_id==0xffff)) {
+		device_property_read_u32(dev, "device-id", &rc->device_id);
+	}
+
+	if (!pcie->reg_base) {
+		pcie->reg_base = devm_platform_ioremap_resource_byname(pdev, "reg");
+		if (IS_ERR(pcie->reg_base)) {
+			dev_err(dev, "missing \"reg\"\n");
+			return PTR_ERR(pcie->reg_base);
+		}
+	}
+
+	if (!rc->cfg_base) { /* ECAM config space is remapped at glue layer */
+		res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "cfg");
+		rc->cfg_base = devm_pci_remap_cfg_resource(dev, res);
+		if (IS_ERR(rc->cfg_base))
+			return PTR_ERR(rc->cfg_base);
+		rc->cfg_res = res;
+	}
 
 	ret = cdns_pcie_host_link_setup(rc);
 	if (ret)
@@ -569,15 +688,48 @@ int cdns_pcie_host_setup(struct cdns_pcie_rc *rc)
 
 	if (!bridge->ops)
 		bridge->ops = &cdns_pcie_host_ops;
-
 	ret = pci_host_probe(bridge);
-	if (ret < 0)
-		goto err_init;
+	if (ret < 0) {
+		dev_err(dev, "pci_host_probe error\n");
+		goto err_link;
+	}
 
 	return 0;
+err_link:
+	dev_err(dev, "PCIe start link failed\n");
 
- err_init:
-	pm_runtime_put_sync(dev);
+	return ret;
+}
+
+int cdns_pcie_host_restore(struct cdns_pcie_rc *rc)
+{
+	struct device *dev = rc->pcie.dev;
+	struct pci_host_bridge *bridge;
+	struct cdns_pcie *pcie;
+	int ret = 0;
+
+	bridge = pci_host_bridge_from_priv(rc);
+	pcie = &rc->pcie;
+	if (rc->quirk_detect_quiet_flag)
+		cdns_pcie_detect_quiet_min_delay_set(&rc->pcie);
+
+	cdns_pcie_host_enable_ptm_response(pcie);
+
+	ret = cdns_pcie_start_link(pcie);
+	if (ret) {
+		dev_err(dev, "Failed to start link\n");
+		return ret;
+	}
+
+	ret = cdns_pcie_host_start_link(rc);
+	if (ret)
+		dev_dbg(dev, "PCIe link never came up\n");
+
+	ret = cdns_pcie_host_init(rc);
+	if (ret)
+		return ret;
+
+	dev_info(dev, "%s end\n", __func__);
 
 	return ret;
 }

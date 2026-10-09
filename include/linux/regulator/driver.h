@@ -365,9 +365,14 @@ struct regulator_desc {
 	const char *name;
 	const char *supply_name;
 	const char *of_match;
+	const char *fwnode_match;
 	bool of_match_full_name;
+	bool fwnode_match_full_name;
 	const char *regulators_node;
 	int (*of_parse_cb)(struct device_node *,
+			    const struct regulator_desc *,
+			    struct regulator_config *);
+	int (*fwnode_parse_cb)(struct fwnode_handle *,
 			    const struct regulator_desc *,
 			    struct regulator_config *);
 	int id;
@@ -435,6 +440,7 @@ struct regulator_desc {
 	unsigned int poll_enabled_time;
 
 	unsigned int (*of_map_mode)(unsigned int mode);
+	unsigned int (*fwnode_map_mode)(unsigned int mode);
 };
 
 /**
@@ -458,6 +464,7 @@ struct regulator_config {
 	const struct regulator_init_data *init_data;
 	void *driver_data;
 	struct device_node *of_node;
+	struct fwnode_handle *fwnode;
 	struct regmap *regmap;
 
 	struct gpio_desc *ena_gpiod;

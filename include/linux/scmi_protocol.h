@@ -704,6 +704,18 @@ struct scmi_powercap_proto_ops {
 					  u32 *power_thresh_high);
 };
 
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+/**
+ * struct scmi_pmexcp_proto_ops - represents the various operations provided
+ * by SCMI PM Exception Protocol
+ *
+ * @get_exception:
+ */
+struct scmi_pmexcp_proto_ops {
+	int (*get_exception)(const struct scmi_protocol_handle *ph);
+};
+#endif
+
 /**
  * struct scmi_notify_ops  - represents notifications' operations provided by
  * SCMI core
@@ -811,6 +823,9 @@ enum scmi_std_protocol {
 	SCMI_PROTOCOL_RESET = 0x16,
 	SCMI_PROTOCOL_VOLTAGE = 0x17,
 	SCMI_PROTOCOL_POWERCAP = 0x18,
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	SCMI_PROTOCOL_PM_EXCP = 0x81,
+#endif
 };
 
 enum scmi_system_events {
@@ -852,6 +867,12 @@ struct scmi_driver {
 int scmi_driver_register(struct scmi_driver *driver,
 			 struct module *owner, const char *mod_name);
 void scmi_driver_unregister(struct scmi_driver *driver);
+
+#ifdef CONFIG_ARCH_CIX
+int scmi_device_opp_table_parse(struct device *dev);
+unsigned long scmi_device_get_freq(struct device *dev);
+int scmi_device_set_freq(struct device *dev, unsigned long freq);
+#endif
 #else
 static inline int
 scmi_driver_register(struct scmi_driver *driver, struct module *owner,
@@ -861,6 +882,21 @@ scmi_driver_register(struct scmi_driver *driver, struct module *owner,
 }
 
 static inline void scmi_driver_unregister(struct scmi_driver *driver) {}
+
+static int scmi_device_opp_table_parse(struct device *dev)
+{
+	return -EINVAL;
+}
+
+unsigned long scmi_device_get_freq(struct device *dev)
+{
+	return -EINVAL;
+}
+
+int scmi_device_set_freq(struct device *dev, unsigned long freq)
+{
+	return -EINVAL;
+}
 #endif /* CONFIG_ARM_SCMI_PROTOCOL */
 
 #define scmi_register(driver) \
@@ -909,6 +945,9 @@ enum scmi_notification_events {
 	SCMI_EVENT_SYSTEM_POWER_STATE_NOTIFIER = 0x0,
 	SCMI_EVENT_POWERCAP_CAP_CHANGED = 0x0,
 	SCMI_EVENT_POWERCAP_MEASUREMENTS_CHANGED = 0x1,
+#ifdef CONFIG_PM_EXCEPTION_PROTOCOL
+	SCMI_EVENT_PMEXCP_REPORT = 0x0,
+#endif
 };
 
 struct scmi_power_state_changed_report {

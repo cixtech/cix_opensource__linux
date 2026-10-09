@@ -12,6 +12,8 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/slab.h>
+#include <linux/acpi.h>
+#include <linux/platform_device.h>
 
 #include "common.h"
 
@@ -64,21 +66,29 @@ static void rx_callback(struct mbox_client *cl, void *m)
 	scmi_rx_callback(smbox->cinfo, shmem_read_header(smbox->shmem), NULL);
 }
 
-static bool mailbox_chan_available(struct device_node *of_node, int idx)
+static __maybe_unused void tx_done_callback(struct mbox_client *cl, void *m, int r)
+{
+	struct scmi_mailbox *smbox = client_to_scmi_mailbox(cl);
+
+	scmi_rx_callback(smbox->cinfo, shmem_read_header(smbox->shmem), NULL);
+}
+
+static bool mailbox_chan_available(struct fwnode_handle *fwnode, int idx)
 {
 	int num_mb;
+	struct fwnode_reference_args fwnode_args;
 
 	/*
 	 * Just check if bidirrectional channels are involved, and check the
 	 * index accordingly; proper full validation will be made later
 	 * in mailbox_chan_setup().
 	 */
-	num_mb = of_count_phandle_with_args(of_node, "mboxes", "#mbox-cells");
+	num_mb = fwnode_count_reference_with_args(fwnode, "mboxes", "#mbox-cells");
 	if (num_mb == 3 && idx == 1)
 		idx = 2;
 
-	return !of_parse_phandle_with_args(of_node, "mboxes",
-					   "#mbox-cells", idx, NULL);
+	return !fwnode_property_get_reference_args(fwnode, "mboxes", "#mbox-cells",
+										1, idx, &fwnode_args);
 }
 
 /**
@@ -101,10 +111,10 @@ static int mailbox_chan_validate(struct device *cdev,
 				 int *a2p_rx_chan, int *p2a_chan)
 {
 	int num_mb, num_sh, ret = 0;
-	struct device_node *np = cdev->of_node;
+	struct fwnode_handle *fwnode = cdev->fwnode;
 
-	num_mb = of_count_phandle_with_args(np, "mboxes", "#mbox-cells");
-	num_sh = of_count_phandle_with_args(np, "shmem", NULL);
+	num_mb = fwnode_count_reference_with_args(fwnode, "mboxes", "#mbox-cells");
+	num_sh = fwnode_count_reference_with_args(fwnode, "shmem", NULL);
 	dev_dbg(cdev, "Found %d mboxes and %d shmems !\n", num_mb, num_sh);
 
 	/* Bail out if mboxes and shmem descriptors are inconsistent */
@@ -112,24 +122,24 @@ static int mailbox_chan_validate(struct device *cdev,
 	    (num_mb == 1 && num_sh != 1) || (num_mb == 3 && num_sh != 2)) {
 		dev_warn(cdev,
 			 "Invalid channel descriptor for '%s' - mbs:%d  shm:%d\n",
-			 of_node_full_name(np), num_mb, num_sh);
+			 fwnode_get_name(fwnode), num_mb, num_sh);
 		return -EINVAL;
 	}
 
 	/* Bail out if provided shmem descriptors do not refer distinct areas  */
 	if (num_sh > 1) {
-		struct device_node *np_tx, *np_rx;
+		struct fwnode_handle *np_tx, *np_rx;
 
-		np_tx = of_parse_phandle(np, "shmem", 0);
-		np_rx = of_parse_phandle(np, "shmem", 1);
+		np_tx = fwnode_find_reference(fwnode, "shmem", 0);
+		np_rx = fwnode_find_reference(fwnode, "shmem", 1);
 		if (!np_tx || !np_rx || np_tx == np_rx) {
 			dev_warn(cdev, "Invalid shmem descriptor for '%s'\n",
-				 of_node_full_name(np));
+				 fwnode_get_name(fwnode));
 			ret = -EINVAL;
 		}
 
-		of_node_put(np_tx);
-		of_node_put(np_rx);
+		fwnode_handle_put(np_tx);
+		fwnode_handle_put(np_rx);
 	}
 
 	/* Calculate channels IDs to use depending on mboxes/shmem layout */
@@ -163,12 +173,15 @@ static int mailbox_chan_setup(struct scmi_chan_info *cinfo, struct device *dev,
 {
 	const char *desc = tx ? "Tx" : "Rx";
 	struct device *cdev = cinfo->dev;
+	struct device *rdev;
 	struct scmi_mailbox *smbox;
-	struct device_node *shmem;
+	struct fwnode_handle *shmem;
 	int ret, a2p_rx_chan, p2a_chan, idx = tx ? 0 : 1;
 	struct mbox_client *cl;
 	resource_size_t size;
-	struct resource res;
+	struct resource *res;
+	struct platform_device *pdev;
+	const char *str[1];
 
 	ret = mailbox_chan_validate(cdev, &a2p_rx_chan, &p2a_chan);
 	if (ret)
@@ -181,21 +194,37 @@ static int mailbox_chan_setup(struct scmi_chan_info *cinfo, struct device *dev,
 	if (!smbox)
 		return -ENOMEM;
 
-	shmem = of_parse_phandle(cdev->of_node, "shmem", idx);
-	if (!of_device_is_compatible(shmem, "arm,scmi-shmem")) {
-		of_node_put(shmem);
-		return -ENXIO;
+	shmem = fwnode_find_reference(cdev->fwnode, "shmem", idx);
+
+	if (IS_ERR_OR_NULL(shmem))
+		return -ENODEV;
+
+	rdev = bus_find_device_by_fwnode(&platform_bus_type, shmem);
+	pdev = rdev ? to_platform_device(rdev) : NULL;
+
+	if (IS_ERR_OR_NULL(pdev))
+		return ENODEV;
+
+	if (fwnode_property_present(shmem, "compatible")) {
+		ret = fwnode_property_read_string(shmem, "compatible", (const char **)&str);
+
+		if (!strcmp(str[0], "arm,scmi-shmem")) {
+			res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+			fwnode_handle_put(shmem);
+		} else {
+			ret = -ENXIO;
+		}
+	} else {
+		ret = -ENXIO;
 	}
 
-	ret = of_address_to_resource(shmem, 0, &res);
-	of_node_put(shmem);
 	if (ret) {
 		dev_err(cdev, "failed to get SCMI %s shared memory\n", desc);
 		return ret;
 	}
 
-	size = resource_size(&res);
-	smbox->shmem = devm_ioremap(dev, res.start, size);
+	size = resource_size(res);
+	smbox->shmem = devm_ioremap(dev, res->start, size);
 	if (!smbox->shmem) {
 		dev_err(dev, "failed to ioremap SCMI %s shared memory\n", desc);
 		return -EADDRNOTAVAIL;
@@ -333,7 +362,7 @@ static const struct scmi_transport_ops scmi_mailbox_ops = {
 
 const struct scmi_desc scmi_mailbox_desc = {
 	.ops = &scmi_mailbox_ops,
-	.max_rx_timeout_ms = 30, /* We may increase this if required */
+	.max_rx_timeout_ms = 300, /* We may increase this if required */
 	.max_msg = 20, /* Limited by MBOX_TX_QUEUE_LEN */
 	.max_msg_size = 128,
 };

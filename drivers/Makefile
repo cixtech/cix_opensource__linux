@@ -163,6 +163,8 @@ obj-$(CONFIG_REMOTEPROC)	+= remoteproc/
 obj-$(CONFIG_RPMSG)		+= rpmsg/
 obj-$(CONFIG_SOUNDWIRE)		+= soundwire/
 
+obj-$(CONFIG_EVL)		+= evl/
+
 # Virtualization drivers
 obj-$(CONFIG_VIRT_DRIVERS)	+= virt/
 obj-$(subst m,y,$(CONFIG_HYPERV))	+= hv/
@@ -197,5 +199,9 @@ obj-$(CONFIG_PECI)		+= peci/
 obj-$(CONFIG_HTE)		+= hte/
 obj-$(CONFIG_DRM_ACCEL)		+= accel/
 obj-$(CONFIG_CDX_BUS)		+= cdx/
+obj-y				+= resctrl/
 
 obj-$(CONFIG_S390)		+= s390/
+
+# Arm ISP Driver
+obj-$(CONFIG_MOST)		+= most/

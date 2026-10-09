@@ -1,0 +1,302 @@
+
+config EVL_SCHED_QUOTA
+	bool "Enable quota-based scheduling"
+	default n
+	help
+	This option enables the SCHED_QUOTA scheduling policy in the
+	EVL core.
+
+	This policy enforces a limitation on the CPU consumption of
+	threads over a globally defined period, known as the quota
+	interval. This is done by pooling threads with common
+	requirements in groups, and giving each group a share of the
+	global period.
+
+	If in doubt, say N.
+
+config EVL_SCHED_TP
+	bool "Enable temporal partitioning policy"
+	default n
+	help
+	This option enables the SCHED_TP scheduling policy in the
+	EVL core.
+
+	This policy runs threads which execution is confined to
+	dedicated time windows defined within a recurring time frame
+	or global period. The ARINC653 standard describes such
+	scheduling policy.
+
+	If in doubt, say N.
+
+config EVL_SCHED_TP_NR_PART
+	int "Number of partitions"
+	default 4
+	range 1 1024
+	depends on EVL_SCHED_TP
+	help
+
+	Define the maximum number of temporal partitions the TP
+	scheduler may have to handle.
+
+config EVL_TIMER_SCALABLE
+	bool
+
+config EVL_SCHED_SCALABLE
+	bool
+
+config EVL_HIGH_PERCPU_CONCURRENCY
+	bool "Optimize for intra-core concurrency"
+	select EVL_TIMER_SCALABLE
+	select EVL_SCHED_SCALABLE
+	default n
+	help
+
+	This option optimizes the implementation for applications with
+	many real-time threads running concurrently on any given CPU
+	core (typically when eight or more threads may be sharing a
+	single CPU core). Currently, this option controls the
+	following aspects of the implementation:
+
+	- when enabled, a per-CPU multi-level priority queue is used
+	  for ordering threads, which operates in constant-time
+	  regardless of the number of concurrently runnable threads on
+	  a CPU (which is normally significantly lower than the total
+	  number of threads existing in the system). Otherwise, a
+	  basic per-CPU linear list is used, which performs better
+	  latency-wise for a small number of runnable threads per CPU.
+
+	- when enabled, a per-CPU red-black tree is used for indexing
+	  the software timers, which has good scalability when many
+	  timers may be outstanding concurrently on any given
+	  CPU. Otherwise, a basic per-CPU linear list is used, which
+	  performs better latency-wise for a small number of running
+	  threads per CPU.
+
+ 	In short, if your application system runs only a few EVL
+ 	threads per CPU core, then your best shot is at leaving this
+ 	option turned off, in order to minimize the cache footprint of
+ 	the queuing operations performed by the scheduler and timer
+ 	subsystems. Otherwise, you may benefit from turning it on in
+ 	order to have constant-time queuing operations for a large
+ 	number of runnable threads and outstanding timers.
+
+config EVL_RUNSTATS
+	bool "Collect runtime statistics"
+	default y
+	help
+	This option causes the EVL core to collect various
+	per-thread runtime statistics, which are accessible via
+	the /sys interface.
+
+config EVL_NET
+        bool "Out-of-band networking (EXPERIMENTAL)"
+	default n
+	select NET_OOB
+	select NET_SCHED
+	select BPF_OOB
+	select INET
+	select VLAN_8021Q
+	help
+	This option enables preliminary networking support for EVL.
+
+	CAUTION! This is WIP, experimental code with limited support
+	at the moment, which is still subject to significant UAPI and
+	kernel API changes all over the map.
+
+menu "Fixed sizes and limits"
+
+config EVL_COREMEM_SIZE
+	int "Size of core memory heap (Kb)"
+	default 2048
+	help
+	The core heap is used for various internal allocations by
+	the EVL core. The size is expressed in Kilobytes.
+
+config EVL_NR_THREADS
+	int "Maximum number of threads"
+	range 1 4096
+	default 256
+	help
+
+	The maximum number of user-space threads attached to the
+	EVL core which can run concurrently in the system.
+
+config EVL_NR_MONITORS
+	int "Maximum number of monitors"
+	range 1 16384
+	default 512
+	help
+
+	The monitor is the fundamental synchronization element
+	implemented by the EVL core, which can underpin any other
+	synchronization mechanism. This value gives the maximum number
+	of monitors which can be alive concurrently in the system.
+
+config EVL_NR_CLOCKS
+	int "Maximum number of clocks"
+	range 1 16384
+	default 8
+	help
+
+	This value gives the maximum number of semaphores which can be
+	alive concurrently in the system for user-space applications.
+
+config EVL_NR_XBUFS
+	int "Maximum number of x-buffers"
+	range 1 16384
+	default 128
+	help
+
+	This value gives the maximum number of x-buffers which can be
+	alive concurrently in the system for user-space applications.
+
+config EVL_NR_PROXIES
+	int "Maximum number of proxies"
+	range 1 16384
+	default 64
+	help
+
+	This value gives the maximum number of file proxies which can
+	be alive concurrently in the system for user-space
+	applications.
+
+config EVL_NR_OBSERVABLES
+       int "Maximum number of observables"
+       range 1 16384
+       default 64
+       help
+
+       This value gives the maximum number of observable elements
+       which can live concurrently in the EVL core. Observables enable
+       the observer design pattern, in which any number of observer
+       threads can be notified of updates to any number of observable
+       subjects, in a loosely coupled fashion. An EVL thread is in and
+       of itself an observable which can be monitored for events;
+       observables attached to threads are not accounted for in this
+       value.
+
+config EVL_NR_NETDEV
+	depends on EVL_NET
+	int "Maximum number of netdevices"
+	range 1 256
+	default 8
+	help
+
+	This value gives the maximum number of network devices which
+	can deal with out-of-band traffic.
+
+endmenu
+
+menu "Pre-calibrated latency"
+
+config EVL_LATENCY_USER
+	int "User scheduling latency (ns)"
+	default 0
+	help
+	The user scheduling latency is the time between the
+	termination of an interrupt handler and the execution of the
+	first instruction of the application thread this
+	handler resumes. A default value of 0 (recommended) will cause
+	a pre-calibrated value to be used.
+
+	If the latmus driver is enabled, this value will be used as the
+	factory default when running "latmus --reset".
+
+config EVL_LATENCY_KERNEL
+	int "Intra-kernel scheduling latency (ns)"
+	default 0
+	help
+	The intra-kernel scheduling latency is the time between the
+	termination of an interrupt handler and the execution of the
+	first instruction of the EVL kthread this handler
+	resumes. A default value of 0 (recommended) will cause a
+	pre-calibrated value to be used.
+
+	Intra-kernel latency is usually significantly lower than user
+	scheduling latency on MMU-enabled platforms, due to CPU cache
+	latency.
+
+	If the auto-tuner is enabled, this value will be used as the
+	factory default when running "autotune --reset".
+
+config EVL_LATENCY_IRQ
+	int "Interrupt latency (ns)"
+	default 0
+	help
+	The interrupt latency is the time between the occurrence of an
+	IRQ and the first instruction of the interrupt handler which
+	will service it. A default value of 0 (recommended) will cause
+	a pre-calibrated value to be used.
+
+	If the auto-tuner is enabled, this value will be used as the
+	factory default when running "autotune --reset".
+
+endmenu
+
+menuconfig EVL_DEBUG
+	bool "Debug support"
+	help
+	  When enabled, various debugging features can be switched
+	  on. They can help to find problems in applications, drivers,
+	  and the EVL core. EVL_DEBUG by itself does not have
+	  any impact on the generated code.
+
+if EVL_DEBUG
+
+config EVL_DEBUG_CORE
+	bool "Core runtime assertions"
+	select DOVETAIL_DEBUG
+	help
+	  This option activates various assertions inside the EVL
+	  core. This option has moderate overhead.
+
+config EVL_DEBUG_MEMORY
+	bool "Memory checks"
+	help
+	  This option enables memory debug checks inside the EVL
+	  core. This option may induce significant overhead with large
+	  heaps.
+
+config EVL_DEBUG_WOLI
+	bool "Default enable locking consistency checks"
+	help
+	  This option enables a set of consistency checks by default
+	  for every new EVL thread for detecting wrong mutex-based
+	  locking patterns (aka EVL_T_WOLI flag), which are otherwise
+	  opted-in programmatically on a per-thread basis when this
+	  option is off. This feature may induce overhead in some
+	  cases, so you should enable it for debugging purposes only.
+
+config EVL_DEBUG_NET
+	bool "Network stack debugging"
+	depends on EVL_NET
+	select DOVETAIL_DEBUG
+	help
+	  This option activates various assertions inside the EVL
+	  network stack. This option has moderate overhead.
+
+config EVL_WATCHDOG
+	bool "Watchdog support"
+	default y
+	help
+	  This option activates a watchdog aimed at detecting runaway
+	  EVL threads. If enabled, the watchdog triggers after a given
+	  period of uninterrupted out-of-band activity has elapsed
+	  without in-band interaction in the meantime.
+
+	  In such an event, the thread preempted by the watchdog timer
+	  is kicked out the out-of-band context, and immediately
+	  receives a SIGDEBUG signal from the kernel.
+
+	  The timeout value of the watchdog can be set using the
+	  EVL_WATCHDOG_TIMEOUT parameter.
+
+config EVL_WATCHDOG_TIMEOUT
+	depends on EVL_WATCHDOG
+	int "Watchdog timeout"
+	default 4
+	range 1 60
+	help
+	  Watchdog timeout value (in seconds).
+
+endif # EVL_DEBUG

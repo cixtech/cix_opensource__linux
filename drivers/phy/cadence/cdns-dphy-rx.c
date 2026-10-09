@@ -14,6 +14,8 @@
 #include <linux/platform_device.h>
 #include <linux/sys_soc.h>
 
+#include "cdns-dphy-rx.h"
+
 #define DPHY_PMA_CMN(reg)		(reg)
 #define DPHY_PCS(reg)			(0xb00 + (reg))
 #define DPHY_ISO(reg)			(0xc00 + (reg))
@@ -51,11 +53,7 @@
 #define DPHY_LANES_MIN			1
 #define DPHY_LANES_MAX			4
 
-struct cdns_dphy_rx {
-	void __iomem *regs;
-	struct device *dev;
-	struct phy *phy;
-};
+
 
 struct cdns_dphy_rx_band {
 	/* Rates are in Mbps. */
@@ -76,7 +74,7 @@ static const struct cdns_dphy_rx_band bands[] = {
 	{ 1500, 1750 }, { 1750, 2000 }, { 2000, 2250 }, { 2250, 2500 }
 };
 
-static int cdns_dphy_rx_power_on(struct phy *phy)
+int cdns_dphy_rx_power_on(struct phy *phy)
 {
 	struct cdns_dphy_rx *dphy = phy_get_drvdata(phy);
 
@@ -88,8 +86,9 @@ static int cdns_dphy_rx_power_on(struct phy *phy)
 
 	return 0;
 }
+EXPORT_SYMBOL(cdns_dphy_rx_power_on);
 
-static int cdns_dphy_rx_power_off(struct phy *phy)
+int cdns_dphy_rx_power_off(struct phy *phy)
 {
 	struct cdns_dphy_rx *dphy = phy_get_drvdata(phy);
 
@@ -97,6 +96,8 @@ static int cdns_dphy_rx_power_off(struct phy *phy)
 
 	return 0;
 }
+
+EXPORT_SYMBOL(cdns_dphy_rx_power_off);
 
 static int cdns_dphy_rx_get_band_ctrl(unsigned long hs_clk_rate)
 {
@@ -165,7 +166,7 @@ static const struct soc_device_attribute cdns_dphy_socinfo[] = {
 	{/* sentinel */}
 };
 
-static int cdns_dphy_rx_configure(struct phy *phy,
+int cdns_dphy_rx_configure(struct phy *phy,
 				  union phy_configure_opts *opts)
 {
 	struct cdns_dphy_rx *dphy = phy_get_drvdata(phy);
@@ -211,8 +212,9 @@ static int cdns_dphy_rx_configure(struct phy *phy,
 
 	return 0;
 }
+EXPORT_SYMBOL(cdns_dphy_rx_configure);
 
-static int cdns_dphy_rx_validate(struct phy *phy, enum phy_mode mode,
+int cdns_dphy_rx_validate(struct phy *phy, enum phy_mode mode,
 				 int submode, union phy_configure_opts *opts)
 {
 	int ret;
@@ -226,6 +228,7 @@ static int cdns_dphy_rx_validate(struct phy *phy, enum phy_mode mode,
 
 	return phy_mipi_dphy_config_validate(&opts->mipi_dphy);
 }
+EXPORT_SYMBOL(cdns_dphy_rx_validate);
 
 static const struct phy_ops cdns_dphy_rx_ops = {
 	.power_on = cdns_dphy_rx_power_on,

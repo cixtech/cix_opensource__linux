@@ -200,7 +200,13 @@ struct pt_regs {
 
 	/* Only valid for some EL1 exceptions. */
 	u64 lockdep_hardirqs;
+#ifdef CONFIG_IRQ_PIPELINE
+	u64 exit_rcu : 1,
+		oob_on_entry : 1,
+		stalled_on_entry : 1;
+#else
 	u64 exit_rcu;
+#endif
 };
 
 static inline bool in_syscall(struct pt_regs const *regs)
@@ -388,6 +394,14 @@ static inline void procedure_link_pointer_set(struct pt_regs *regs,
 }
 
 extern unsigned long profile_pc(struct pt_regs *regs);
+
+#ifdef CONFIG_CIX_DST
+/*
+ * Get pt_regs info in handling exception.
+ * @regs: where to store pt_regs info
+ */
+extern void plat_get_pt_regs(struct pt_regs *regs);
+#endif
 
 #endif /* __ASSEMBLY__ */
 #endif

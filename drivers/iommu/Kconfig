@@ -412,6 +412,23 @@ config ARM_SMMU_V3_SVA
 	  Say Y here if your system supports SVA extensions such as PCIe PASID
 	  and PRI.
 
+config ARM_SMMU_V3_WALK
+	bool "ARM SMMU Resource Walk"
+	depends on ARM_SMMU_V3
+	default n
+
+config ARM_SMMU_V3_DEBUG
+	bool "ARM SMMU Debug"
+	depends on ARM_SMMU_V3
+	select ARM_SMMU_V3_WALK
+	default n
+
+config ARM_SMMU_V3_DUMP
+	bool "ARM SMMU Dump"
+	depends on ARM_SMMU_V3
+	select ARM_SMMU_V3_WALK
+	default n
+
 config S390_IOMMU
 	def_bool y if S390 && PCI
 	depends on S390 && PCI

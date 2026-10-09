@@ -60,6 +60,10 @@
 #include "braille.h"
 #include "internal.h"
 
+#ifdef CONFIG_PLAT_PRINTK_EXT
+#include <linux/soc/cix/printk_ext.h>
+#endif
+
 int console_printk[4] = {
 	CONSOLE_LOGLEVEL_DEFAULT,	/* console_loglevel */
 	MESSAGE_LOGLEVEL_DEFAULT,	/* default_message_loglevel */
@@ -2067,10 +2071,10 @@ static u8 *__printk_recursion_counter(void)
 	bool success = true;				\
 							\
 	typecheck(u8 *, recursion_ptr);			\
-	local_irq_save(flags);				\
+	prb_irq_save(flags);				\
 	(recursion_ptr) = __printk_recursion_counter();	\
 	if (*(recursion_ptr) > PRINTK_MAX_RECURSION) {	\
-		local_irq_restore(flags);		\
+		prb_irq_restore(flags);			\
 		success = false;			\
 	} else {					\
 		(*(recursion_ptr))++;			\
@@ -2083,7 +2087,7 @@ static u8 *__printk_recursion_counter(void)
 	do {						\
 		typecheck(u8 *, recursion_ptr);		\
 		(*(recursion_ptr))--;			\
-		local_irq_restore(flags);		\
+		prb_irq_restore(flags);			\
 	} while (0)
 
 int printk_delay_msec __read_mostly;
@@ -2202,9 +2206,8 @@ int vprintk_store(int facility, int level,
 	u16 text_len;
 	int ret = 0;
 	u64 ts_nsec;
-
-	if (!printk_enter_irqsave(recursion_ptr, irqflags))
-		return 0;
+	char tmp_buf[100] = {'\0'};
+	u16 tmp_len = 0;
 
 	/*
 	 * Since the duration of printk() can vary depending on the message
@@ -2214,7 +2217,9 @@ int vprintk_store(int facility, int level,
 	 */
 	ts_nsec = local_clock();
 
-	caller_id = printk_caller_id();
+#ifdef CONFIG_PLAT_PRINTK_EXT
+	plat_log_store_add_time(tmp_buf, sizeof(tmp_buf), &tmp_len);
+#endif
 
 	/*
 	 * The sprintf needs to come first since the syslog prefix might be
@@ -2223,7 +2228,7 @@ int vprintk_store(int facility, int level,
 	 * terminating '\0', which is not counted by vsnprintf().
 	 */
 	va_copy(args2, args);
-	reserve_size = vsnprintf(&prefix_buf[0], sizeof(prefix_buf), fmt, args2) + 1;
+	reserve_size = vsnprintf(&prefix_buf[0], sizeof(prefix_buf), fmt, args2) + tmp_len + 1;
 	va_end(args2);
 
 	if (reserve_size > PRINTKRB_RECORD_MAX)
@@ -2238,6 +2243,12 @@ int vprintk_store(int facility, int level,
 
 	if (dev_info)
 		flags |= LOG_NEWLINE;
+
+	/* Disable interrupts as late as possible. */
+	if (!printk_enter_irqsave(recursion_ptr, irqflags))
+		return 0;
+
+	caller_id = printk_caller_id();
 
 	if (flags & LOG_CONT) {
 		prb_rec_init_wr(&r, reserve_size);
@@ -2258,6 +2269,7 @@ int vprintk_store(int facility, int level,
 		}
 	}
 
+
 	/*
 	 * Explicitly initialize the record before every prb_reserve() call.
 	 * prb_reserve_in_last() and prb_reserve() purposely invalidate the
@@ -2274,7 +2286,14 @@ int vprintk_store(int facility, int level,
 	}
 
 	/* fill message */
+#ifdef CONFIG_PLAT_PRINTK_EXT
+	memcpy(&r.text_buf[0], tmp_buf, tmp_len);
+	text_len = printk_sprint(&r.text_buf[0] + tmp_len, reserve_size - tmp_len, facility, &flags, fmt, args);
+	text_len += tmp_len;
+#else
 	text_len = printk_sprint(&r.text_buf[0], reserve_size, facility, &flags, fmt, args);
+#endif
+
 	if (trunc_msg_len)
 		memcpy(&r.text_buf[text_len], trunc_msg, trunc_msg_len);
 	r.info->text_len = text_len + trunc_msg_len;
@@ -2311,6 +2330,12 @@ asmlinkage int vprintk_emit(int facility, int level,
 
 	if (unlikely(suppress_panic_printk) && other_cpu_in_panic())
 		return 0;
+
+	if (unlikely(!printk_stage_safe())) {
+		printed_len = vprintk_store(facility, level, dev_info, fmt, args);
+		defer_console_output();
+		return printed_len;
+	}
 
 	if (level == LOGLEVEL_SCHED) {
 		level = LOGLEVEL_DEFAULT;
@@ -2437,6 +2462,75 @@ static void set_user_specified(struct console_cmdline *c, bool user_specified)
 	/* At least one console defined by the user on the command line. */
 	console_set_on_cmdline = 1;
 }
+
+#ifdef CONFIG_RAW_PRINTK
+static struct console *raw_console;
+static DEFINE_HARD_SPINLOCK(raw_console_lock);
+
+static inline bool console_is_usable(struct console *con);
+
+void raw_puts(const char *s, size_t len)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&raw_console_lock, flags);
+	if (raw_console)
+		raw_console->write_raw(raw_console, s, len);
+	raw_spin_unlock_irqrestore(&raw_console_lock, flags);
+}
+EXPORT_SYMBOL(raw_puts);
+
+void raw_vprintk(const char *fmt, va_list ap)
+{
+	char buf[256];
+	size_t n;
+
+	if (raw_console == NULL || !console_is_usable(raw_console))
+		return;
+
+        touch_nmi_watchdog();
+	n = vscnprintf(buf, sizeof(buf), fmt, ap);
+	raw_puts(buf, n);
+}
+EXPORT_SYMBOL(raw_vprintk);
+
+asmlinkage __visible void raw_printk(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	raw_vprintk(fmt, ap);
+	va_end(ap);
+}
+EXPORT_SYMBOL(raw_printk);
+
+static inline void register_raw_console(struct console *newcon)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&raw_console_lock, flags);
+	if (newcon->write_raw)
+		raw_console = newcon;
+	raw_spin_unlock_irqrestore(&raw_console_lock, flags);
+}
+
+static inline void unregister_raw_console(struct console *oldcon)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&raw_console_lock, flags);
+	if (oldcon == raw_console)
+		raw_console = NULL;
+	raw_spin_unlock_irqrestore(&raw_console_lock, flags);
+}
+
+#else
+
+static inline void register_raw_console(struct console *newcon) { }
+
+static inline void unregister_raw_console(struct console *oldcon) { }
+
+#endif
 
 static int __add_preferred_console(char *name, int idx, char *options,
 				   char *brl_options, bool user_specified)
@@ -3523,6 +3617,9 @@ void register_console(struct console *newcon)
 	if (err || newcon->flags & CON_BRL)
 		goto unlock;
 
+	/* The latest raw console to register is current. */
+	register_raw_console(newcon);
+
 	/*
 	 * If we have a bootconsole, and are switching to a real console,
 	 * don't print everything out again, since when the boot console, and
@@ -3594,6 +3691,8 @@ static int unregister_console_locked(struct console *console)
 	lockdep_assert_console_list_lock_held();
 
 	con_printk(KERN_INFO, console, "disabled\n");
+
+	unregister_raw_console(console);
 
 	res = _braille_unregister_console(console);
 	if (res < 0)

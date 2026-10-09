@@ -604,8 +604,8 @@ static inline void drm_gem_gpuva_init(struct drm_gem_object *obj)
  * This iterator walks over all &drm_gpuva structures associated with the
  * &drm_gpuva_manager.
  */
-#define drm_gem_for_each_gpuva(entry__, obj__) \
-	list_for_each_entry(entry__, &(obj__)->gpuva.list, gem.entry)
+#define drm_gem_for_each_gpuvm_bo(entry__, obj__) \
+	list_for_each_entry(entry__, &(obj__)->gpuva.list, list.entry.gem)
 
 /**
  * drm_gem_for_each_gpuva_safe() - iternator to safely walk over a list of
@@ -618,7 +618,7 @@ static inline void drm_gem_gpuva_init(struct drm_gem_object *obj)
  * &drm_gem_object. It is implemented with list_for_each_entry_safe(), hence
  * it is save against removal of elements.
  */
-#define drm_gem_for_each_gpuva_safe(entry__, next__, obj__) \
-	list_for_each_entry_safe(entry__, next__, &(obj__)->gpuva.list, gem.entry)
+#define drm_gem_for_each_gpuvm_bo_safe(entry__, next__, obj__) \
+	list_for_each_entry_safe(entry__, next__, &(obj__)->gpuva.list, list.entry.gem)
 
 #endif /* __DRM_GEM_H__ */

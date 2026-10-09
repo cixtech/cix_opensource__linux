@@ -110,6 +110,7 @@ Documentation for filesystem implementations.
    ramfs-rootfs-initramfs
    relay
    romfs
+   resctrl
    smb/index
    spufs/index
    squashfs

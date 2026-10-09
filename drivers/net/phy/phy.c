@@ -36,7 +36,11 @@
 #include <net/genetlink.h>
 #include <net/sock.h>
 
+#ifdef CONFIG_ARCH_CIX_FPGA
+#define PHY_STATE_TIME	(HZ/50)
+#else
 #define PHY_STATE_TIME	HZ
+#endif
 
 #define PHY_STATE_STR(_state)			\
 	case PHY_##_state:			\

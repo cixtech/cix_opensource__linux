@@ -31,6 +31,9 @@
 #include <linux/slab.h>
 #include <linux/smp.h>
 #include <linux/spinlock.h>
+#ifdef CONFIG_PLAT_SDEI_EXCEPTIONS_TEST
+#include <linux/debugfs.h>
+#endif
 
 /*
  * The call to use to reach the firmware.
@@ -1068,11 +1071,13 @@ void __init sdei_init(void)
 	int ret;
 
 	ret = platform_driver_register(&sdei_driver);
+
 	if (ret || !sdei_present_acpi())
 		return;
 
 	pdev = platform_device_register_simple(sdei_driver.driver.name,
 					       0, NULL, 0);
+
 	if (IS_ERR(pdev)) {
 		ret = PTR_ERR(pdev);
 		platform_driver_unregister(&sdei_driver);

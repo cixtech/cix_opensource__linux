@@ -49,6 +49,7 @@
 #include <uapi/linux/netdev.h>
 #include <linux/hashtable.h>
 #include <linux/rbtree.h>
+#include <dovetail/netdevice.h>
 #include <net/net_trackers.h>
 #include <net/net_debug.h>
 #include <net/dropreason-core.h>
@@ -333,6 +334,8 @@ enum netdev_state_t {
 	__LINK_STATE_LINKWATCH_PENDING,
 	__LINK_STATE_DORMANT,
 	__LINK_STATE_TESTING,
+	__LINK_STATE_OOB_PORT,
+	__LINK_STATE_OOB,
 };
 
 struct gro_list {
@@ -481,6 +484,7 @@ static inline bool napi_prefer_busy_poll(struct napi_struct *n)
 }
 
 bool napi_schedule_prep(struct napi_struct *n);
+bool napi_schedule_unprep(struct napi_struct *n);
 
 /**
  *	napi_schedule - schedule NAPI poll
@@ -654,6 +658,8 @@ struct netdev_queue {
 	unsigned long		trans_start;
 
 	unsigned long		state;
+
+	struct oob_netqueue_state oob;
 
 #ifdef CONFIG_BQL
 	struct dql		dql;
@@ -1406,6 +1412,13 @@ struct netdev_net_notifier {
  *			   struct kernel_hwtstamp_config *kernel_config,
  *			   struct netlink_ext_ack *extack);
  *	Change the hardware timestamping parameters for NIC device.
+ * void	(*ndo_enable_oob)(struct net_device *dev);
+ *	Turn on out-of-band I/O handling. On return from this handler, the device
+ *	must be prepared to handle RX/TX packets from the out-of-band stage. This
+ *	handler is optional.
+ * void	(*ndo_disable_oob)(struct net_device *dev);
+ *	Turn off out-of-band I/O handling, reverting the effect of ndo_enable_oob().
+ *	This handler is optional.
  */
 struct net_device_ops {
 	int			(*ndo_init)(struct net_device *dev);
@@ -1645,6 +1658,10 @@ struct net_device_ops {
 	int			(*ndo_hwtstamp_set)(struct net_device *dev,
 						    struct kernel_hwtstamp_config *kernel_config,
 						    struct netlink_ext_ack *extack);
+#ifdef CONFIG_NET_OOB
+	int			(*ndo_enable_oob)(struct net_device *dev);
+	void			(*ndo_disable_oob)(struct net_device *dev);
+#endif
 };
 
 /**
@@ -1698,6 +1715,7 @@ struct net_device_ops {
  * @IFF_SEE_ALL_HWTSTAMP_REQUESTS: device wants to see calls to
  *	ndo_hwtstamp_set() for all timestamp requests regardless of source,
  *	even if those aren't HWTSTAMP_SOURCE_NETDEV.
+ * @IFF_OOB_CAPABLE: device supports direct out-of-band I/O operations.
  */
 enum netdev_priv_flags {
 	IFF_802_1Q_VLAN			= 1<<0,
@@ -1734,6 +1752,8 @@ enum netdev_priv_flags {
 	IFF_TX_SKB_NO_LINEAR		= BIT_ULL(31),
 	IFF_CHANGE_PROTO_DOWN		= BIT_ULL(32),
 	IFF_SEE_ALL_HWTSTAMP_REQUESTS	= BIT_ULL(33),
+	IFF_OOB_CAPABLE			= BIT_ULL(34),
+	IFF_OOB_PORT			= BIT_ULL(35),
 };
 
 #define IFF_802_1Q_VLAN			IFF_802_1Q_VLAN
@@ -1767,6 +1787,7 @@ enum netdev_priv_flags {
 #define IFF_FAILOVER_SLAVE		IFF_FAILOVER_SLAVE
 #define IFF_L3MDEV_RX_HANDLER		IFF_L3MDEV_RX_HANDLER
 #define IFF_TX_SKB_NO_LINEAR		IFF_TX_SKB_NO_LINEAR
+#define IFF_OOB_CAPABLE			IFF_OOB_CAPABLE
 
 /* Specifies the type of the struct net_device::ml_priv pointer */
 enum netdev_ml_priv_type {
@@ -1850,6 +1871,7 @@ enum netdev_stat_type {
  *	@tlsdev_ops:	Transport Layer Security offload operations
  *	@header_ops:	Includes callbacks for creating,parsing,caching,etc
  *			of Layer 2 headers.
+ *	@oob_state:	Out-of-band networking state (oob stage diversion)
  *
  *	@flags:		Interface flags (a la BSD)
  *	@xdp_features:	XDP capability supported by the device
@@ -2157,6 +2179,10 @@ struct net_device {
 
 #if IS_ENABLED(CONFIG_TLS_DEVICE)
 	const struct tlsdev_ops *tlsdev_ops;
+#endif
+
+#ifdef CONFIG_NET_OOB
+	struct oob_netdev_state  oob_state;
 #endif
 
 	const struct header_ops *header_ops;
@@ -3229,6 +3255,11 @@ struct softnet_data {
 
 #ifdef CONFIG_NET_FLOW_LIMIT
 	struct sd_flow_limit __rcu *flow_limit;
+#endif
+#ifdef CONFIG_NET_OOB
+	struct list_head	inband_rx_list; /* Inband skbs received oob */
+	hard_spinlock_t		inband_rx_lock;
+	struct irq_work		inband_rx_work;
 #endif
 	struct Qdisc		*output_queue;
 	struct Qdisc		**output_queue_tailp;
@@ -4313,6 +4344,120 @@ static inline bool netif_device_present(const struct net_device *dev)
 void netif_device_detach(struct net_device *dev);
 
 void netif_device_attach(struct net_device *dev);
+
+#ifdef CONFIG_NET_OOB
+
+static inline void netdev_set_oob_capable(struct net_device *dev)
+{
+	dev->priv_flags |= IFF_OOB_CAPABLE;
+}
+
+static inline bool netdev_is_oob_capable(struct net_device *dev)
+{
+	return !!(dev->priv_flags & IFF_OOB_CAPABLE);
+}
+
+bool netif_receive_oob(struct sk_buff *skb);
+
+/**
+ *	netif_oob_diversion - is the ingress traffic diverted for out-of-band handling?
+ *	@dev: network device
+ *
+ * Check if the RX packets to this (real) device are currently
+ * diverted to a companion kernel for out-of-band handling.
+ */
+static inline bool netif_oob_diversion(const struct net_device *dev)
+{
+	return test_bit(__LINK_STATE_OOB, &dev->state);
+}
+
+static inline void netif_enable_oob_diversion(struct net_device *dev)
+{
+	const struct net_device_ops *ops = dev->netdev_ops;
+
+	if (ops->ndo_enable_oob)
+		ops->ndo_enable_oob(dev);
+
+	set_bit(__LINK_STATE_OOB, &dev->state);
+}
+
+static inline void netif_disable_oob_diversion(struct net_device *dev)
+{
+	const struct net_device_ops *ops = dev->netdev_ops;
+
+	clear_bit(__LINK_STATE_OOB, &dev->state);
+	smp_mb__after_atomic();
+
+	if (ops->ndo_disable_oob)
+		ops->ndo_disable_oob(dev);
+}
+
+/**
+ *	netif_oob_port - is the interface an active oob port?
+ *	@dev: network device
+ *
+ * Check whether the interface acts as a virtual port for handling oob
+ * traffic.
+ */
+static inline bool netif_oob_port(struct net_device *dev)
+{
+	return test_bit(__LINK_STATE_OOB_PORT, &dev->state);
+}
+
+static inline void netif_enable_oob_port(struct net_device *dev)
+{
+	set_bit(__LINK_STATE_OOB_PORT, &dev->state);
+}
+
+static inline void netif_disable_oob_port(struct net_device *dev)
+{
+	clear_bit(__LINK_STATE_OOB_PORT, &dev->state);
+	smp_mb__after_atomic();
+}
+
+/* Out-of-band hooks implemented by the companion core. */
+void napi_schedule_oob(struct napi_struct *n);
+void napi_complete_oob(struct napi_struct *n);
+bool netif_deliver_oob(struct sk_buff *skb);
+void netif_tx_lock_oob(struct netdev_queue *txq);
+void netif_tx_unlock_oob(struct netdev_queue *txq);
+void process_inband_tx_backlog(struct softnet_data *sd);
+
+#else  /* !CONFIG_NET_OOB */
+
+static inline void netdev_set_oob_capable(struct net_device *dev)
+{
+}
+
+static inline bool netif_receive_oob(struct sk_buff *skb)
+{
+	return false;
+}
+
+static inline bool netif_oob_diversion(const struct net_device *dev)
+{
+	return false;
+}
+
+static inline bool netif_oob_port(struct net_device *dev)
+{
+	return false;
+}
+
+static inline bool netdev_is_oob_capable(struct net_device *dev)
+{
+	return false;
+}
+
+static inline void netif_tx_lock_oob(struct netdev_queue *txq)
+{
+}
+
+static inline void netif_tx_unlock_oob(struct netdev_queue *txq)
+{
+}
+
+#endif  /* !CONFIG_NET_OOB */
 
 /*
  * Network interface message level settings

@@ -50,6 +50,7 @@ int snd_hdac_device_init(struct hdac_device *codec, struct hdac_bus *bus,
 	dev->bus = &snd_hda_bus_type;
 	dev->release = default_release;
 	dev->groups = hdac_dev_attr_groups;
+	dev_set_uevent_suppress(dev, 1);
 	dev_set_name(dev, "%s", name);
 	device_enable_async_suspend(dev);
 

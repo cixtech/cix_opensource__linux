@@ -14,6 +14,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/device.h>
+#include <linux/acpi.h>
 
 #include "common.h"
 
@@ -314,7 +315,7 @@ static void scmi_device_release(struct device *dev)
 static void __scmi_device_destroy(struct scmi_device *scmi_dev)
 {
 	pr_debug("(%s) Destroying SCMI device '%s' for protocol 0x%x (%s)\n",
-		 of_node_full_name(scmi_dev->dev.parent->of_node),
+		 fwnode_get_name(scmi_dev->dev.parent->fwnode),
 		 dev_name(&scmi_dev->dev), scmi_dev->protocol_id,
 		 scmi_dev->name);
 
@@ -326,7 +327,7 @@ static void __scmi_device_destroy(struct scmi_device *scmi_dev)
 }
 
 static struct scmi_device *
-__scmi_device_create(struct device_node *np, struct device *parent,
+__scmi_device_create(struct fwnode_handle *np, struct device *parent,
 		     int protocol, const char *name)
 {
 	int id, retval;
@@ -377,7 +378,7 @@ __scmi_device_create(struct device_node *np, struct device *parent,
 	scmi_dev->id = id;
 	scmi_dev->protocol_id = protocol;
 	scmi_dev->dev.parent = parent;
-	device_set_node(&scmi_dev->dev, of_fwnode_handle(np));
+	device_set_node(&scmi_dev->dev, np);
 	scmi_dev->dev.bus = &scmi_bus_type;
 	scmi_dev->dev.release = scmi_device_release;
 	dev_set_name(&scmi_dev->dev, "scmi_dev.%d", id);
@@ -386,8 +387,8 @@ __scmi_device_create(struct device_node *np, struct device *parent,
 	if (retval)
 		goto put_dev;
 
-	pr_debug("(%s) Created SCMI device '%s' for protocol 0x%x (%s)\n",
-		 of_node_full_name(parent->of_node),
+	pr_info("(%s) Created SCMI device '%s' for protocol 0x%x (%s)\n",
+		 fwnode_get_name(parent->fwnode),
 		 dev_name(&scmi_dev->dev), protocol, name);
 
 	return scmi_dev;
@@ -420,7 +421,7 @@ put_dev:
  *	   could have been potentially created for a whole protocol, unless no
  *	   device was found to have been requested for that specific protocol.
  */
-struct scmi_device *scmi_device_create(struct device_node *np,
+struct scmi_device *scmi_device_create(struct fwnode_handle *np,
 				       struct device *parent, int protocol,
 				       const char *name)
 {
@@ -451,7 +452,7 @@ struct scmi_device *scmi_device_create(struct device_node *np,
 			scmi_dev = sdev;
 		else
 			pr_err("(%s) Failed to create device for protocol 0x%x (%s)\n",
-			       of_node_full_name(parent->of_node),
+			       fwnode_get_name(parent->fwnode),
 			       rdev->id_table->protocol_id,
 			       rdev->id_table->name);
 	}

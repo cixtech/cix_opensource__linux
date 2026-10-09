@@ -15,8 +15,14 @@
 #include <linux/maple_tree.h>
 #include <linux/irqdomain.h>
 #include <linux/sysfs.h>
+#include <linux/irq_pipeline.h>
 
 #include "internals.h"
+
+#ifdef CONFIG_PLAT_AP_HOOK
+#include <linux/soc/cix/rdr_platform_ap_hook.h>
+#include <linux/soc/cix/rdr_platform.h>
+#endif
 
 /*
  * lockdep: we want to handle all irq_desc locks as a single lock-class:
@@ -662,6 +668,17 @@ void irq_init_desc(unsigned int irq)
 
 #endif /* !CONFIG_SPARSE_IRQ */
 
+static inline bool is_hardirq(struct irq_desc *desc)
+{
+	if (!irqs_pipelined())
+		return in_hardirq();
+
+	if (in_pipeline() || !(desc->istate & IRQS_DEFERRED))
+		return true;
+
+	return false;
+}
+
 int handle_irq_desc(struct irq_desc *desc)
 {
 	struct irq_data *data;
@@ -670,22 +687,30 @@ int handle_irq_desc(struct irq_desc *desc)
 		return -EINVAL;
 
 	data = irq_desc_get_irq_data(desc);
-	if (WARN_ON_ONCE(!in_hardirq() && handle_enforce_irqctx(data)))
+	if (WARN_ON_ONCE(!in_hardirq() && handle_enforce_irqctx(data))) {
+		printk(KERN_INFO"%s handle irq=%d,hwirq=%ld,name=%s,in_pipeline=%ld,preempt=0x%x,istate=0x%x\n",
+			__func__, data->irq, data->hwirq, desc->name, in_pipeline(),
+			preempt_count(), (desc->istate&IRQS_DEFERRED));
 		return -EPERM;
+	}
 
 	generic_handle_irq_desc(desc);
 	return 0;
 }
 
 /**
- * generic_handle_irq - Invoke the handler for a particular irq
+ * generic_handle_irq - Handle a particular irq
  * @irq:	The irq number to handle
  *
  * Returns:	0 on success, or -EINVAL if conversion has failed
  *
  * 		This function must be called from an IRQ context with irq regs
  * 		initialized.
-  */
+ *
+ * The handler is invoked, unless we are entering the interrupt
+ * pipeline, in which case the incoming IRQ is only scheduled for
+ * deferred delivery.
+ */
 int generic_handle_irq(unsigned int irq)
 {
 	return handle_irq_desc(irq_to_desc(irq));
@@ -711,6 +736,7 @@ int generic_handle_irq_safe(unsigned int irq)
 	local_irq_save(flags);
 	ret = handle_irq_desc(irq_to_desc(irq));
 	local_irq_restore(flags);
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(generic_handle_irq_safe);
@@ -729,7 +755,21 @@ EXPORT_SYMBOL_GPL(generic_handle_irq_safe);
  */
 int generic_handle_domain_irq(struct irq_domain *domain, unsigned int hwirq)
 {
-	return handle_irq_desc(irq_resolve_mapping(domain, hwirq));
+	int ret;
+
+#ifdef CONFIG_PLAT_AP_HOOK
+	irq_trace_hook(0, 0, hwirq);
+#endif
+
+	struct irq_desc *desc = irq_resolve_mapping(domain, hwirq);
+	ret = irqs_pipelined() ? generic_pipeline_irq_desc(desc)
+		: handle_irq_desc(desc);
+
+#ifdef CONFIG_PLAT_AP_HOOK
+	irq_trace_hook(1, 0, hwirq);
+#endif
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(generic_handle_domain_irq);
 
