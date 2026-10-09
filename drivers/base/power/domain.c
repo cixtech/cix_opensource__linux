@@ -22,6 +22,7 @@
 #include <linux/export.h>
 #include <linux/cpu.h>
 #include <linux/debugfs.h>
+#include <linux/acpi.h>
 
 #include "power.h"
 
@@ -130,6 +131,7 @@ static const struct genpd_lock_ops genpd_spin_ops = {
 #define genpd_is_active_wakeup(genpd)	(genpd->flags & GENPD_FLAG_ACTIVE_WAKEUP)
 #define genpd_is_cpu_domain(genpd)	(genpd->flags & GENPD_FLAG_CPU_DOMAIN)
 #define genpd_is_rpm_always_on(genpd)	(genpd->flags & GENPD_FLAG_RPM_ALWAYS_ON)
+#define genpd_is_opp_table_fw(genpd)	(genpd->flags & GENPD_FLAG_OPP_TABLE_FW)
 
 static inline bool irq_safe_dev_in_sleep_domain(struct device *dev,
 		const struct generic_pm_domain *genpd)
@@ -2329,7 +2331,7 @@ int of_genpd_add_provider_simple(struct device_node *np,
 	genpd->dev.of_node = np;
 
 	/* Parse genpd OPP table */
-	if (genpd->set_performance_state) {
+	if (!genpd_is_opp_table_fw(genpd) && genpd->set_performance_state) {
 		ret = dev_pm_opp_of_add_table(&genpd->dev);
 		if (ret)
 			return dev_err_probe(&genpd->dev, ret, "Failed to add OPP table\n");
@@ -2344,7 +2346,7 @@ int of_genpd_add_provider_simple(struct device_node *np,
 
 	ret = genpd_add_provider(np, genpd_xlate_simple, genpd);
 	if (ret) {
-		if (genpd->set_performance_state) {
+		if (!genpd_is_opp_table_fw(genpd) && genpd->set_performance_state) {
 			dev_pm_opp_put_opp_table(genpd->opp_table);
 			dev_pm_opp_of_remove_table(&genpd->dev);
 		}
@@ -2388,7 +2390,7 @@ int of_genpd_add_provider_onecell(struct device_node *np,
 		genpd->dev.of_node = np;
 
 		/* Parse genpd OPP table */
-		if (genpd->set_performance_state) {
+		if (!genpd_is_opp_table_fw(genpd) && genpd->set_performance_state) {
 			ret = dev_pm_opp_of_add_table_indexed(&genpd->dev, i);
 			if (ret) {
 				dev_err_probe(&genpd->dev, ret,
@@ -2424,7 +2426,7 @@ error:
 		genpd->provider = NULL;
 		genpd->has_provider = false;
 
-		if (genpd->set_performance_state) {
+		if (!genpd_is_opp_table_fw(genpd) && genpd->set_performance_state) {
 			dev_pm_opp_put_opp_table(genpd->opp_table);
 			dev_pm_opp_of_remove_table(&genpd->dev);
 		}
@@ -2456,7 +2458,7 @@ void of_genpd_del_provider(struct device_node *np)
 				if (gpd->provider == &np->fwnode) {
 					gpd->has_provider = false;
 
-					if (!gpd->set_performance_state)
+					if (genpd_is_opp_table_fw(gpd) || !gpd->set_performance_state)
 						continue;
 
 					dev_pm_opp_put_opp_table(gpd->opp_table);
@@ -2657,7 +2659,8 @@ EXPORT_SYMBOL_GPL(of_genpd_remove_last);
 
 static void genpd_release_dev(struct device *dev)
 {
-	of_node_put(dev->of_node);
+	fwnode_handle_put(dev->fwnode);
+
 	kfree(dev);
 }
 
@@ -3374,6 +3377,90 @@ DEFINE_SHOW_ATTRIBUTE(total_idle_time);
 DEFINE_SHOW_ATTRIBUTE(devices);
 DEFINE_SHOW_ATTRIBUTE(perf_state);
 
+#ifdef CONFIG_ARCH_CIX
+static ssize_t genpd_control_store(struct file *file,
+				  const char __user *buffer,
+				  size_t count, loff_t *ppos)
+{
+	struct generic_pm_domain *genpd = file->private_data;
+	int ret;
+	char *input;
+	unsigned int on = 0;
+
+	input = kzalloc(count, GFP_KERNEL);
+	if (!input) {
+		kfree(input);
+		return -ENOMEM;
+	}
+	if (copy_from_user(input, buffer, count)) {
+		kfree(input);
+		return -EFAULT;
+	}
+
+	ret = kstrtouint(input, 0, &on);
+	if (ret) {
+		kfree(input);
+		return -EINVAL;
+	}
+
+	if (on)
+		genpd_power_on(genpd, 0);
+	else
+		genpd_power_off(genpd, true, 0);
+
+	kfree(input);
+	return count;
+}
+
+static const struct file_operations genpd_control_fops = {
+	.open = simple_open,
+	.write = genpd_control_store,
+	.owner = THIS_MODULE,
+	.llseek = default_llseek,
+};
+
+static ssize_t genpd_always_on_store(struct file *file,
+				  const char __user *buffer,
+				  size_t count, loff_t *ppos)
+{
+	struct generic_pm_domain *genpd = file->private_data;
+	int ret;
+	char *input;
+	unsigned int flags = 0;
+
+	input = kzalloc(count, GFP_KERNEL);
+	if (!input) {
+		kfree(input);
+		return -ENOMEM;
+	}
+	if (copy_from_user(input, buffer, count)) {
+		kfree(input);
+		return -EFAULT;
+	}
+
+	ret = kstrtouint(input, 0, &flags);
+	if (ret) {
+		kfree(input);
+		return -EINVAL;
+	}
+
+	if (flags)
+		genpd->flags |= GENPD_FLAG_ALWAYS_ON;
+	else
+		genpd->flags &= (~GENPD_FLAG_ALWAYS_ON);
+
+	kfree(input);
+	return count;
+}
+
+static const struct file_operations genpd_always_on_fops = {
+	.open = simple_open,
+	.write = genpd_always_on_store,
+	.owner = THIS_MODULE,
+	.llseek = default_llseek,
+};
+#endif
+
 static void genpd_debug_add(struct generic_pm_domain *genpd)
 {
 	struct dentry *d;
@@ -3395,6 +3482,10 @@ static void genpd_debug_add(struct generic_pm_domain *genpd)
 			    d, genpd, &total_idle_time_fops);
 	debugfs_create_file("devices", 0444,
 			    d, genpd, &devices_fops);
+#ifdef CONFIG_ARCH_CIX
+	debugfs_create_file("on", 044, d, genpd, &genpd_control_fops);
+	debugfs_create_file("always_on", 044, d, genpd, &genpd_always_on_fops);
+#endif
 	if (genpd->set_performance_state)
 		debugfs_create_file("perf_state", 0444,
 				    d, genpd, &perf_state_fops);
@@ -3422,3 +3513,344 @@ static void __exit genpd_debug_exit(void)
 }
 __exitcall(genpd_debug_exit);
 #endif /* CONFIG_DEBUG_FS */
+
+#ifdef CONFIG_ARM_SCMI_SUPPORT_DT_ACPI
+struct fwnode_genpd_provider {
+	struct list_head link;
+	struct fwnode_handle *fwnode;
+	fwnode_genpd_xlate_t xlate;
+	void *data;
+};
+
+/* List of registered PM domain providers. */
+static LIST_HEAD(fwnode_genpd_providers);
+/* Mutex to protect the list above. */
+static DEFINE_MUTEX(fwnode_genpd_mutex);
+
+static struct generic_pm_domain *fwnode_genpd_xlate_onecell(
+					struct fwnode_reference_args *fwnode_args,
+					void *data)
+{
+	struct genpd_onecell_data *genpd_data = data;
+	unsigned int idx = fwnode_args->args[0];
+
+	if (fwnode_args->nargs != 1)
+		return ERR_PTR(-EINVAL);
+
+	if (idx >= genpd_data->num_domains) {
+		pr_err("%s: invalid domain index %u\n", __func__, idx);
+		return ERR_PTR(-EINVAL);
+	}
+
+	if (!genpd_data->domains[idx])
+		return ERR_PTR(-ENOENT);
+
+	return genpd_data->domains[idx];
+}
+
+static int fwnode_genpd_add_provider(struct fwnode_handle *np, fwnode_genpd_xlate_t xlate,
+			      void *data)
+{
+	struct fwnode_genpd_provider *cp;
+
+	cp = kzalloc(sizeof(*cp), GFP_KERNEL);
+	if (!cp)
+		return -ENOMEM;
+
+	cp->fwnode = fwnode_handle_get(np);
+	cp->data = data;
+	cp->xlate = xlate;
+	fwnode_dev_initialized(np, true);
+
+	mutex_lock(&fwnode_genpd_mutex);
+	list_add(&cp->link, &fwnode_genpd_providers);
+	mutex_unlock(&fwnode_genpd_mutex);
+
+	return 0;
+}
+
+int fwnode_genpd_add_provider_onecell(struct fwnode_handle *np,
+				  struct genpd_onecell_data *data)
+{
+	struct generic_pm_domain *genpd;
+	unsigned int i;
+	int ret = -EINVAL;
+
+	if (!np || !data)
+		return -EINVAL;
+
+	if (!data->fwnode_xlate)
+		data->fwnode_xlate = fwnode_genpd_xlate_onecell;
+
+	for (i = 0; i < data->num_domains; i++) {
+		genpd = data->domains[i];
+
+		if (!genpd)
+			continue;
+		if (!genpd_present(genpd))
+			goto error;
+
+		genpd->dev.fwnode = np;
+
+		/* Parse genpd OPP table */
+
+		if (!genpd_is_opp_table_fw(genpd) && genpd->set_performance_state) {
+			ret = dev_pm_opp_of_add_table_indexed(&genpd->dev, i);
+			if (ret) {
+				dev_err_probe(&genpd->dev, ret,
+					      "Failed to add OPP table for index %d\n", i);
+				goto error;
+			}
+
+			/*
+			 * Save table for faster processing while setting
+			 * performance state.
+			 */
+			genpd->opp_table = dev_pm_opp_get_opp_table(&genpd->dev);
+			WARN_ON(IS_ERR(genpd->opp_table));
+		}
+
+		genpd->provider = np;
+		genpd->has_provider = true;
+	}
+
+	ret = fwnode_genpd_add_provider(np, data->fwnode_xlate, data);
+	if (ret < 0)
+		goto error;
+
+	return 0;
+
+error:
+	while (i--) {
+		genpd = data->domains[i];
+
+		if (!genpd)
+			continue;
+
+		genpd->provider = NULL;
+		genpd->has_provider = false;
+
+		if (!genpd_is_opp_table_fw(genpd) && genpd->set_performance_state) {
+			dev_pm_opp_put_opp_table(genpd->opp_table);
+			dev_pm_opp_of_remove_table(&genpd->dev);
+		}
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(fwnode_genpd_add_provider_onecell);
+
+void fwnode_genpd_del_provider(struct fwnode_handle *fwnode)
+{
+	struct fwnode_genpd_provider *cp, *tmp;
+	struct generic_pm_domain *gpd;
+
+	mutex_lock(&gpd_list_lock);
+	mutex_lock(&fwnode_genpd_mutex);
+	list_for_each_entry_safe(cp, tmp, &fwnode_genpd_providers, link) {
+		if (cp->fwnode == fwnode) {
+			/*
+			 * For each PM domain associated with the
+			 * provider, set the 'has_provider' to false
+			 * so that the PM domain can be safely removed.
+			 */
+			list_for_each_entry(gpd, &gpd_list, gpd_list_node) {
+				if (gpd->provider == fwnode) {
+					gpd->has_provider = false;
+
+					if (genpd_is_opp_table_fw(gpd) || !gpd->set_performance_state)
+						continue;
+
+					dev_pm_opp_put_opp_table(gpd->opp_table);
+					dev_pm_opp_of_remove_table(&gpd->dev);
+				}
+			}
+
+			fwnode_dev_initialized(cp->fwnode, false);
+			list_del(&cp->link);
+			fwnode_handle_put(cp->fwnode);
+			kfree(cp);
+			break;
+		}
+	}
+	mutex_unlock(&fwnode_genpd_mutex);
+	mutex_unlock(&gpd_list_lock);
+}
+EXPORT_SYMBOL_GPL(fwnode_genpd_del_provider);
+
+static struct generic_pm_domain *fwnode_genpd_get_from_provider(
+					struct fwnode_reference_args *fwnode_args)
+{
+	struct generic_pm_domain *genpd = ERR_PTR(-ENOENT);
+	struct fwnode_genpd_provider *provider;
+
+	if (!fwnode_args)
+		return ERR_PTR(-EINVAL);
+
+	mutex_lock(&fwnode_genpd_mutex);
+	/* Check if we have such a provider in our array */
+	list_for_each_entry(provider, &fwnode_genpd_providers, link) {
+		if (provider->fwnode == fwnode_args->fwnode) {
+			genpd = provider->xlate(fwnode_args, provider->data);
+		}
+
+		if (!IS_ERR(genpd))
+			break;
+	}
+	mutex_unlock(&fwnode_genpd_mutex);
+
+	return genpd;
+}
+
+static int __fwnode_genpd_dev_pm_attach(struct device *dev, struct device *base_dev,
+				 unsigned int index, bool power_on)
+{
+	struct fwnode_reference_args fwnode_args;
+	struct generic_pm_domain *pd;
+	int pstate;
+	int ret;
+
+	if (!dev->fwnode)
+		return -ENOENT;
+
+	ret = fwnode_property_get_reference_args(dev->fwnode, "power-domains", "#power-domain-cells",
+				    					1, index, &fwnode_args);
+
+	if (ret < 0)
+		return ret;
+
+	mutex_lock(&gpd_list_lock);
+
+	pd = fwnode_genpd_get_from_provider(&fwnode_args);
+
+	fwnode_handle_put(fwnode_args.fwnode);
+
+	if (IS_ERR(pd)) {
+		mutex_unlock(&gpd_list_lock);
+		dev_dbg(dev, "%s() failed to find PM domain: %ld\n",
+			__func__, PTR_ERR(pd));
+		return driver_deferred_probe_check_state(base_dev);
+	}
+
+	dev_dbg(dev, "adding to PM domain %s\n", pd->name);
+
+	ret = genpd_add_device(pd, dev, base_dev);
+	mutex_unlock(&gpd_list_lock);
+
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "failed to add to PM domain %s\n", pd->name);
+
+	dev->pm_domain->detach = genpd_dev_pm_detach;
+	dev->pm_domain->sync = genpd_dev_pm_sync;
+
+	/* Set the default performance state */
+	pstate = of_get_required_opp_performance_state(dev->of_node, index);
+	if (pstate < 0 && pstate != -ENODEV && pstate != -EOPNOTSUPP) {
+		ret = pstate;
+		goto err;
+	} else if (pstate > 0) {
+		ret = dev_pm_genpd_set_performance_state(dev, pstate);
+		if (ret)
+			goto err;
+		dev_gpd_data(dev)->default_pstate = pstate;
+	}
+
+	if (power_on) {
+		genpd_lock(pd);
+		ret = genpd_power_on(pd, 0);
+		genpd_unlock(pd);
+	}
+
+	if (ret) {
+		/* Drop the default performance state */
+		if (dev_gpd_data(dev)->default_pstate) {
+			dev_pm_genpd_set_performance_state(dev, 0);
+			dev_gpd_data(dev)->default_pstate = 0;
+		}
+
+		genpd_remove_device(pd, dev);
+		return -EPROBE_DEFER;
+	}
+
+	return 1;
+
+err:
+	dev_err(dev, "failed to set required performance state for power-domain %s: %d\n",
+		pd->name, ret);
+	genpd_remove_device(pd, dev);
+	return ret;
+}
+
+struct device *fwnode_genpd_dev_pm_attach_by_id(struct device *dev,
+					 unsigned int index)
+{
+	struct device *virt_dev;
+	int num_domains;
+	int ret;
+
+	if (!dev->fwnode)
+		return NULL;
+
+	/* Verify that the index is within a valid range. */
+	num_domains = fwnode_count_reference_with_args(dev->fwnode, "power-domains", "#power-domain-cells");
+	if (index >= num_domains)
+		return NULL;
+
+	/* Allocate and register device on the genpd bus. */
+	virt_dev = kzalloc(sizeof(*virt_dev), GFP_KERNEL);
+	if (!virt_dev)
+		return ERR_PTR(-ENOMEM);
+
+	dev_set_name(virt_dev, "genpd:%u:%s", index, dev_name(dev));
+	virt_dev->bus = &genpd_bus_type;
+	virt_dev->release = genpd_release_dev;
+	virt_dev->fwnode = fwnode_handle_get(dev->fwnode);
+
+	if (!has_acpi_companion(dev)) {
+		virt_dev->of_node = of_node_get(dev->of_node);
+	}
+
+	ret = device_register(virt_dev);
+	if (ret) {
+		put_device(virt_dev);
+		return ERR_PTR(ret);
+	}
+
+	/* Try to attach the device to the PM domain at the specified index. */
+	ret = __fwnode_genpd_dev_pm_attach(virt_dev, dev, index, false);
+	if (ret < 1) {
+		device_unregister(virt_dev);
+		return ret ? ERR_PTR(ret) : NULL;
+	}
+
+	pm_runtime_enable(virt_dev);
+	genpd_queue_power_off_work(dev_to_genpd(virt_dev));
+
+	return virt_dev;
+}
+EXPORT_SYMBOL_GPL(fwnode_genpd_dev_pm_attach_by_id);
+
+struct device *fwnode_genpd_dev_pm_attach_by_name(struct device *dev, const char *name)
+{
+	int index;
+	if (!dev->fwnode)
+		return NULL;
+
+	index = fwnode_property_match_string(dev_fwnode(dev), "power-domain-names", name);
+
+	if (index < 0)
+		return NULL;
+
+	return fwnode_genpd_dev_pm_attach_by_id(dev, index);
+}
+
+struct device *fwnode_dev_pm_domain_attach_by_name(struct device *dev,
+					    const char *name)
+{
+	if (!has_acpi_companion(dev) && dev->pm_domain)
+		return ERR_PTR(-EEXIST);
+
+	return fwnode_genpd_dev_pm_attach_by_name(dev, name);
+}
+EXPORT_SYMBOL_GPL(fwnode_dev_pm_domain_attach_by_name);
+#endif

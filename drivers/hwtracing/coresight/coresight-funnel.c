@@ -42,6 +42,7 @@ DEFINE_CORESIGHT_DEVLIST(funnel_devs, "funnel");
  */
 struct funnel_drvdata {
 	void __iomem		*base;
+	bool dummy;
 	struct clk		*atclk;
 	struct coresight_device	*csdev;
 	unsigned long		priority;
@@ -236,11 +237,13 @@ static int funnel_probe(struct device *dev, struct resource *res)
 			return ret;
 	}
 
+	drvdata->dummy = of_property_read_bool(dev->of_node, "dummy_funnel");
+
 	/*
 	 * Map the device base for dynamic-funnel, which has been
 	 * validated by AMBA core.
 	 */
-	if (res) {
+	if (!drvdata->dummy && res) {
 		base = devm_ioremap_resource(dev, res);
 		if (IS_ERR(base)) {
 			ret = PTR_ERR(base);

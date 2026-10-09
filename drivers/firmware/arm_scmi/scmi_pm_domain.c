@@ -146,7 +146,16 @@ static struct scmi_driver scmi_power_domain_driver = {
 	.remove = scmi_pm_domain_remove,
 	.id_table = scmi_id_table,
 };
+
+#ifdef CONFIG_ARCH_CIX
+static int __init scmi_power_domain_init(void)
+{
+	return scmi_register(&scmi_power_domain_driver);
+}
+subsys_initcall_sync(scmi_power_domain_init);
+#else
 module_scmi_driver(scmi_power_domain_driver);
+#endif
 
 MODULE_AUTHOR("Sudeep Holla <sudeep.holla@arm.com>");
 MODULE_DESCRIPTION("ARM SCMI power domain driver");

@@ -2513,6 +2513,18 @@ static void quirk_disable_aspm_l0s_l1(struct pci_dev *dev)
 	pci_disable_link_state(dev, PCIE_LINK_STATE_L0S | PCIE_LINK_STATE_L1);
 }
 
+/* CIX */
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_INTEL, 0x1572, quirk_disable_aspm_l0s_l1);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_REALTEK, 0x8125, quirk_disable_aspm_l0s);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_REALTEK, 0x8126, quirk_disable_aspm_l0s);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_REALTEK, 0x8168, quirk_disable_aspm_l0s);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_MEDIATEK, 0x0616, quirk_disable_aspm_l0s_l1);
+DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_SAMSUNG, 0xa804, quirk_disable_aspm_l0s_l1);
+DECLARE_PCI_FIXUP_FINAL(0x1e0f, 0x002a, quirk_disable_aspm_l0s_l1);	/* sandisk */
+DECLARE_PCI_FIXUP_FINAL(0x1e0f, 0x0009, quirk_disable_aspm_l0s_l1);	/* sandisk */
+DECLARE_PCI_FIXUP_FINAL(0x1987, 0x5013, quirk_disable_aspm_l0s_l1);	/* tinkplus */
+DECLARE_PCI_FIXUP_FINAL(0x2646, 0x501d, quirk_disable_aspm_l0s_l1);	/* kingston */
+
 /*
  * ASM1083/1085 PCIe-PCI bridge devices cause AER timeout errors on the
  * upstream PCIe root port when ASPM is enabled. At least L0s mode is affected;

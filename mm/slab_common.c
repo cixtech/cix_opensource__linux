@@ -1039,6 +1039,7 @@ void kfree(const void *object)
 	struct folio *folio;
 	struct slab *slab;
 	struct kmem_cache *s;
+	size_t size;
 
 	trace_kfree(_RET_IP_, object);
 
@@ -1050,6 +1051,19 @@ void kfree(const void *object)
 		free_large_kmalloc(folio, (void *)object);
 		return;
 	}
+
+#ifndef CONFIG_KASAN
+	if (!is_kfence_address(object)) {
+		size = ksize(object);
+		WARN((is_power_of_2(size) &&
+		      (((size - 1) & (size_t)object) != 0)) ||
+			     ((!size && !is_power_of_2(size) &&
+			       (((size_t)object) & (PAGE_SIZE - 1)) % size !=
+				       0)),
+		     "kfree: object[0x%llx] size[0x%lx] is not a matching",
+		     (u64)object, size);
+	}
+#endif
 
 	slab = folio_slab(folio);
 	s = slab->slab_cache;

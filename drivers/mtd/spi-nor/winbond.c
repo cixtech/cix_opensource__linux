@@ -144,6 +144,13 @@ static const struct flash_info winbond_nor_parts[] = {
 	{ "w25q512jvq", INFO(0xef4020, 0, 64 * 1024, 1024)
 		NO_SFDP_FLAGS(SECT_4K | SPI_NOR_DUAL_READ |
 			      SPI_NOR_QUAD_READ) },
+	{ "w77q64jw", INFO(0xef8a17, 0, 64 * 1024, 128)
+                NO_SFDP_FLAGS(SECT_4K | SPI_NOR_QUAD_READ | SPI_NOR_SKIP_SFDP) },
+	{ "w77q128jw", INFO(0xef8a18, 0, 64 * 1024, 256)
+                NO_SFDP_FLAGS(SECT_4K | SPI_NOR_QUAD_READ | SPI_NOR_SKIP_SFDP) },
+	{ "w25q512nw", INFO(0xef6020, 0, 64 * 1024, 1024)
+                PARSE_SFDP
+                OTP_INFO(256, 3, 0x1000, 0x1000) },
 };
 
 /**

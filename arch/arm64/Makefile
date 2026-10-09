@@ -217,3 +217,6 @@ define archhelp
   echo  '                  (distribution) /sbin/installkernel or'
   echo  '                  install to $$(INSTALL_PATH) and run lilo'
 endef
+
+KBUILD_CFLAGS += -I$(srctree)/arch/$(SRCARCH)/xenomai/include -I$(srctree)/include/xenomai
+core-$(CONFIG_XENOMAI) += arch/arm64/xenomai/

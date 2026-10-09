@@ -22,6 +22,12 @@ struct asoc_simple_tdm_width_map {
 	u16 slot_width;
 };
 
+struct asoc_simple_jack {
+	struct snd_soc_jack jack;
+	struct snd_soc_jack_pin pin;
+	struct snd_soc_jack_gpio gpio;
+};
+
 struct asoc_simple_dai {
 	const char *name;
 	unsigned int sysclk;
@@ -34,18 +40,20 @@ struct asoc_simple_dai {
 	bool clk_fixed;
 	struct asoc_simple_tdm_width_map *tdm_width_map;
 	int n_tdm_widths;
+
+	/* pa power control */
+	struct gpio_desc *pdb0_gpiod;
+	struct gpio_desc *pdb1_gpiod;
+	struct gpio_desc *pdb2_gpiod;
+	struct gpio_desc *pdb3_gpiod;
+	/* headset detect */
+	struct asoc_simple_jack hs_jack;
 };
 
 struct asoc_simple_data {
 	u32 convert_rate;
 	u32 convert_channels;
 	const char *convert_sample_format;
-};
-
-struct asoc_simple_jack {
-	struct snd_soc_jack jack;
-	struct snd_soc_jack_pin pin;
-	struct snd_soc_jack_gpio gpio;
 };
 
 struct prop_nums {
@@ -144,6 +152,13 @@ int asoc_simple_set_dailink_name(struct device *dev,
 				 const char *fmt, ...);
 int asoc_simple_parse_card_name(struct snd_soc_card *card,
 				char *prefix);
+
+int asoc_simple_parse_pa(struct device *dev,
+			 struct device_node *np,
+			 struct asoc_simple_dai *simple_dai);
+void asoc_simple_parse_jack(struct device_node *np,
+			    struct asoc_simple_dai *simple_dai);
+
 
 int asoc_simple_parse_clk(struct device *dev,
 			  struct device_node *node,

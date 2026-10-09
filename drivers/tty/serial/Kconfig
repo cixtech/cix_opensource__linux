@@ -1578,6 +1578,26 @@ config SERIAL_NUVOTON_MA35D1_CONSOLE
 	  but you can alter that using a kernel command line option such as
 	  "console=ttyNVTx".
 
+config SERIAL_GPIO_UART
+	tristate "Software GPIO UART (Xenomai OOB)"
+	depends on GPIOLIB
+	depends on XENOMAI
+	select SERIAL_CORE
+	help
+	  This driver implements a simple software UART over one TX GPIO and
+	  one RX GPIO. It is intended for low-rate control or bring-up channels
+	  when no hardware UART is available.
+
+	  The bit-level engine runs on the Xenomai 3 / Dovetail out-of-band
+	  execution stage (rtdm_timer / rtdm_irq with raw GPIO access) so that
+	  bit timing is deterministic even under heavy in-band load. GPIOs must
+	  be memory-mapped (non-sleeping) and active-high.
+
+	  Only 8N1 without hardware flow control is supported. Validated rates:
+	  up to 19200 baud is stable under load; 38400 baud is reliable at
+	  idle / light load. Higher rates are rejected by the driver. Run the
+	  Xenomai "autotune" tool once at boot to calibrate the clock gravity.
+
 endmenu
 
 config SERIAL_MCTRL_GPIO

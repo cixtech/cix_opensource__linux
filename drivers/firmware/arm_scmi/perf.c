@@ -767,45 +767,59 @@ static int scmi_perf_level_limits_notify(const struct scmi_protocol_handle *ph,
 }
 
 static void scmi_perf_domain_init_fc(const struct scmi_protocol_handle *ph,
-				     u32 domain, struct scmi_fc_info **p_fc)
+				     u32 domain, struct perf_dom_info* dom)
 {
+	struct scmi_fc_info **p_fc = &dom->fc_info;
 	struct scmi_fc_info *fc;
 
 	fc = devm_kcalloc(ph->dev, PERF_FC_MAX, sizeof(*fc), GFP_KERNEL);
 	if (!fc)
 		return;
 
-	ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
-				   PERF_LEVEL_SET, 4, domain,
-				   &fc[PERF_FC_LEVEL].set_addr,
-				   &fc[PERF_FC_LEVEL].set_db);
+	if (dom->info.set_perf) {
+		ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
+					   PERF_LEVEL_SET, 4, domain,
+					   &fc[PERF_FC_LEVEL].set_addr,
+					   &fc[PERF_FC_LEVEL].set_db);
 
-	ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
-				   PERF_LEVEL_GET, 4, domain,
-				   &fc[PERF_FC_LEVEL].get_addr, NULL);
+		ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
+					   PERF_LEVEL_GET, 4, domain,
+					   &fc[PERF_FC_LEVEL].get_addr, NULL);
+	}
 
-	ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
-				   PERF_LIMITS_SET, 8, domain,
-				   &fc[PERF_FC_LIMIT].set_addr,
-				   &fc[PERF_FC_LIMIT].set_db);
+	if (dom->set_limits) {
+		ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
+					   PERF_LIMITS_SET, 8, domain,
+					   &fc[PERF_FC_LIMIT].set_addr,
+					   &fc[PERF_FC_LIMIT].set_db);
 
-	ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
-				   PERF_LIMITS_GET, 8, domain,
-				   &fc[PERF_FC_LIMIT].get_addr, NULL);
-
+		ph->hops->fastchannel_init(ph, PERF_DESCRIBE_FASTCHANNEL,
+					   PERF_LIMITS_GET, 8, domain,
+					   &fc[PERF_FC_LIMIT].get_addr, NULL);
+	}
 	*p_fc = fc;
 }
 
 /* Device specific ops */
 static int scmi_dev_domain_id(struct device *dev)
 {
-	struct of_phandle_args clkspec;
+	struct fwnode_reference_args fwnode_args;
+	int index;
 
-	if (of_parse_phandle_with_args(dev->of_node, "clocks", "#clock-cells",
-				       0, &clkspec))
-		return -EINVAL;
+	/* Find the corresponding index for power-domain "perf". */
+	index = fwnode_property_match_string(dev->fwnode, "power-domain-names", "perf");
+	if (index < 0) {
+		if (fwnode_property_get_reference_args(dev->fwnode, "clocks",
+											"#clock-cells", 1, 0, &fwnode_args))
+			return -EINVAL;
+	} else {
+		if (fwnode_property_get_reference_args(dev->fwnode, "power-domains",
+					"#power-domain-cells", 1, index,
+					&fwnode_args))
+			return -EINVAL;
+	}
 
-	return clkspec.args[0];
+	return fwnode_args.args[0];
 }
 
 static int scmi_dvfs_device_opps_add(const struct scmi_protocol_handle *ph,
@@ -813,6 +827,10 @@ static int scmi_dvfs_device_opps_add(const struct scmi_protocol_handle *ph,
 {
 	int idx, ret, domain;
 	unsigned long freq;
+#ifdef CONFIG_ARCH_CIX
+	unsigned long volt;
+#endif
+	struct scmi_opp *opp;
 	struct perf_dom_info *dom;
 
 	domain = scmi_dev_domain_id(dev);
@@ -823,13 +841,14 @@ static int scmi_dvfs_device_opps_add(const struct scmi_protocol_handle *ph,
 	if (IS_ERR(dom))
 		return PTR_ERR(dom);
 
-	for (idx = 0; idx < dom->opp_count; idx++) {
-		if (!dom->level_indexing_mode)
-			freq = dom->opp[idx].perf * dom->mult_factor;
-		else
-			freq = dom->opp[idx].indicative_freq * dom->mult_factor;
-
+	for (opp = dom->opp, idx = 0; idx < dom->opp_count; idx++, opp++) {
+		freq = opp->perf * dom->mult_factor;
+#ifdef CONFIG_ARCH_CIX
+		volt = opp->power * 1000; /* translate mV to uV */
+		ret = dev_pm_opp_add(dev, freq, volt);
+#else
 		ret = dev_pm_opp_add(dev, freq, 0);
+#endif
 		if (ret) {
 			dev_warn(dev, "failed to add opp %luHz\n", freq);
 			dev_pm_opp_remove_all_dynamic(dev);
@@ -1127,7 +1146,7 @@ static int scmi_perf_protocol_init(const struct scmi_protocol_handle *ph)
 		scmi_perf_describe_levels_get(ph, dom, version);
 
 		if (dom->perf_fastchannels)
-			scmi_perf_domain_init_fc(ph, dom->id, &dom->fc_info);
+			scmi_perf_domain_init_fc(ph, dom->id, dom);
 	}
 
 	ret = devm_add_action_or_reset(ph->dev, scmi_perf_xa_destroy, pinfo);

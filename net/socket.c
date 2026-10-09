@@ -110,6 +110,10 @@
 #include <linux/ptp_clock_kernel.h>
 #include <trace/events/sock.h>
 
+#ifdef CONFIG_PLAT_FDLEAK
+#include <linux/soc/cix/dst_fdleak.h>
+#endif
+
 #ifdef CONFIG_NET_RX_BUSY_POLL
 unsigned int sysctl_net_busy_read __read_mostly;
 unsigned int sysctl_net_busy_poll __read_mostly;
@@ -578,6 +582,9 @@ struct file *sock_alloc_file(struct socket *sock, int flags, const char *dname)
 	sock->file = file;
 	file->private_data = sock;
 	stream_open(SOCK_INODE(sock), file);
+#ifdef CONFIG_PLAT_FDLEAK
+	fdleak_report(FDLEAK_WP_SOCKET, 0);
+#endif
 	return file;
 }
 EXPORT_SYMBOL(sock_alloc_file);
@@ -783,6 +790,9 @@ static void __sock_release(struct socket *sock, struct inode *inode)
 		return;
 	}
 	sock->file = NULL;
+#ifdef CONFIG_PLAT_FDLEAK
+	fdleak_report(FDLEAK_WP_SOCKET, 1);
+#endif
 }
 
 /**

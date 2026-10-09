@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright 2024 Cix Technology Group Co., Ltd.
+ */
+&cix_dma_dev_0 {
+	sync = <0>;
+	cix,rcsu = <&cix_csi_rcsu_0>;
+	cix,hw = <&cix_bridge_0>;
+	status = "okay";
+	iommus = <&smmu_mmhub 0x21>;
+	port {
+		cix_dma_dev_0_in: endpoint {
+			remote-endpoint = <&mipi_csi2_virt00_out>;
+		};
+	};
+};
+
+&cix_csi_rcsu_0 {
+	status = "okay";
+};
+
+&cix_bridge_0 {
+	status = "okay";
+};
+
+&cix_mipi_csi_0 {
+	lanes = <4>;
+	status = "okay";
+};
+
+&cix_mipi_virt_csi_00 {
+	status = "okay";
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			mipi_csi2_virt00_in: endpoint@1 {
+				reg = <1>;
+				remote-endpoint = <&dphy0_out>;
+			};
+		};
+		port@1 {
+			reg = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			mipi_csi2_virt00_out: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&cix_dma_dev_0_in>;
+			};
+		};
+	};
+};
+
+&cix_dphy_hw_0 {
+	status = "okay";
+};
+
+&cix_dphy_0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		port@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			dphy0_in: endpoint@1 {
+				reg = <1>;
+				remote-endpoint = <&lt7911uxc_out>;
+				data-lanes = <1 2 3 4>;
+				clock-lanes = <0>;
+			};
+		};
+
+		port@1 {
+			reg = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			dphy0_out: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&mipi_csi2_virt00_in>;
+			};
+		};
+	};
+};
+
+&i2c0 {
+	lt7911uxc: lt7911uxc@43 {
+		compatible = "lontium,lt7911uxc";
+		#sound-dai-cells = <0>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x43>;
+		/*interrupt-parent = <&gpio0>;*/
+		/*interrupts = <RK_PB7 IRQ_TYPE_EDGE_RISING>;*/
+		pinctrl-names = "default","gpio";
+		pinctrl-0 = <&pinctrl_lt7911_hw>;
+		pinctrl-1 = <&pinctrl_lt7911_hw>;
+		pwdn-gpios = <&fch_gpio0 15 GPIO_ACTIVE_HIGH>;
+		power-gpios = <&fch_gpio1 16 GPIO_ACTIVE_HIGH>;
+		power1-gpios = <&fch_gpio1 18 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&fch_gpio1 12 GPIO_ACTIVE_HIGH>;
+		status = "okay";
+		port {
+			lt7911uxc_out: endpoint {
+				remote-endpoint = <&dphy0_in>;
+				data-lanes = <4>;
+				clock-lanes = <0>;
+			};
+		};
+	};
+};

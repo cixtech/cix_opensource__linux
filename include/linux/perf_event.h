@@ -1335,6 +1335,7 @@ __is_default_overflow_handler(perf_overflow_handler_t overflow_handler)
 		return true;
 	if (unlikely(overflow_handler == perf_event_output_backward))
 		return true;
+
 	return false;
 }
 

@@ -34,6 +34,7 @@ obj-y				+= meson/
 obj-$(CONFIG_GOOGLE_FIRMWARE)	+= google/
 obj-y				+= efi/
 obj-y				+= imx/
+obj-y				+= cix/
 obj-y				+= psci/
 obj-y				+= smccc/
 obj-y				+= tegra/

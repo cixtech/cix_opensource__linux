@@ -61,6 +61,10 @@
  * GENPD_FLAG_MIN_RESIDENCY:	Enable the genpd governor to consider its
  *				components' next wakeup when determining the
  *				optimal idle state.
+ *
+ * GENPD_FLAG_OPP_TABLE_FW:	The genpd provider supports performance states,
+ *				but its corresponding OPP tables are not
+ *				described in DT, but are given directly by FW.
  */
 #define GENPD_FLAG_PM_CLK	 (1U << 0)
 #define GENPD_FLAG_IRQ_SAFE	 (1U << 1)
@@ -69,6 +73,7 @@
 #define GENPD_FLAG_CPU_DOMAIN	 (1U << 4)
 #define GENPD_FLAG_RPM_ALWAYS_ON (1U << 5)
 #define GENPD_FLAG_MIN_RESIDENCY (1U << 6)
+#define GENPD_FLAG_OPP_TABLE_FW	 (1U << 7)
 
 enum gpd_status {
 	GENPD_STATE_ON = 0,	/* PM domain is on */
@@ -323,11 +328,32 @@ struct of_device_id;
 typedef struct generic_pm_domain *(*genpd_xlate_t)(struct of_phandle_args *args,
 						   void *data);
 
+#ifdef CONFIG_ARM_SCMI_SUPPORT_DT_ACPI
+typedef struct generic_pm_domain *(*fwnode_genpd_xlate_t)(struct fwnode_reference_args *args,
+						   void *data);
+#endif
+
 struct genpd_onecell_data {
 	struct generic_pm_domain **domains;
 	unsigned int num_domains;
 	genpd_xlate_t xlate;
+#ifdef CONFIG_ARM_SCMI_SUPPORT_DT_ACPI
+	fwnode_genpd_xlate_t fwnode_xlate;
+#endif
 };
+
+#ifdef CONFIG_ARM_SCMI_SUPPORT_DT_ACPI
+/* ACPI PM domain providers */
+int fwnode_genpd_add_provider_onecell(struct fwnode_handle *np,
+				  struct genpd_onecell_data *data);
+void fwnode_genpd_del_provider(struct fwnode_handle *fwnode);
+struct device *fwnode_genpd_dev_pm_attach_by_id(struct device *dev,
+					 unsigned int index);
+struct device *fwnode_genpd_dev_pm_attach_by_name(struct device *dev,
+					   const char *name);
+struct device *fwnode_dev_pm_domain_attach_by_name(struct device *dev,
+					    const char *name);
+#endif
 
 #ifdef CONFIG_PM_GENERIC_DOMAINS_OF
 int of_genpd_add_provider_simple(struct device_node *np,

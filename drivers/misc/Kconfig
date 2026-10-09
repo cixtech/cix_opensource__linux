@@ -579,4 +579,8 @@ source "drivers/misc/cardreader/Kconfig"
 source "drivers/misc/uacce/Kconfig"
 source "drivers/misc/pvpanic/Kconfig"
 source "drivers/misc/mchp_pci1xxxx/Kconfig"
+source "drivers/misc/cix/sensor/core/Kconfig"
+source "drivers/misc/cix/sensor/cix_sensorhub/Kconfig"
+source "drivers/misc/cix/sensor/test/Kconfig"
+source "drivers/misc/cix/sensor/scp/Kconfig"
 endmenu

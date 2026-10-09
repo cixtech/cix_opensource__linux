@@ -751,6 +751,13 @@ config XILINX_ZYNQMP_DPDMA
 	  driver provides the dmaengine required by the DisplayPort subsystem
 	  display driver.
 
+config ARM_DMA350
+	tristate "ARM DMA350 support"
+	select DMA_ENGINE
+	select DMA_VIRTUAL_CHANNELS
+	help
+	  Enable support for ARM  DMA350 controller.
+
 # driver files
 source "drivers/dma/bestcomm/Kconfig"
 

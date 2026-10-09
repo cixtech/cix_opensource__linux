@@ -384,6 +384,26 @@ static int sof_ipc3_pcm_dai_link_fixup(struct snd_soc_pcm_runtime *rtd,
 		dev_dbg(component->dev, "AMD_DMIC channels_min: %d channels_max: %d\n",
 			channels->min, channels->max);
 		break;
+	case SOF_DAI_CIX_I2S_SC:
+		rate->min = private->dai_config->i2s_sc.rate;
+		rate->max = private->dai_config->i2s_sc.rate;
+		channels->min = private->dai_config->i2s_sc.channels;
+		channels->max = private->dai_config->i2s_sc.channels;
+
+		dev_dbg(component->dev, "rate_min: %d rate_max: %d\n", rate->min, rate->max);
+		dev_dbg(component->dev, "channels_min: %d channels_max: %d\n",
+			channels->min, channels->max);
+		break;
+	case SOF_DAI_CIX_I2S_MC:
+		rate->min = private->dai_config->i2s_mc.rate;
+		rate->max = private->dai_config->i2s_mc.rate;
+		channels->min = private->dai_config->i2s_mc.channels;
+		channels->max = private->dai_config->i2s_mc.channels;
+
+		dev_dbg(component->dev, "rate_min: %d rate_max: %d\n", rate->min, rate->max);
+		dev_dbg(component->dev, "channels_min: %d channels_max: %d\n",
+			channels->min, channels->max);
+		break;
 	default:
 		dev_err(component->dev, "Invalid DAI type %d\n", private->dai_config->type);
 		break;

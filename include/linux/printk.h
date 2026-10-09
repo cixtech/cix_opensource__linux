@@ -8,6 +8,9 @@
 #include <linux/linkage.h>
 #include <linux/ratelimit_types.h>
 #include <linux/once_lite.h>
+#ifdef CONFIG_PLAT_PRINTK_EXT
+#include <linux/soc/cix/printk_ext.h>
+#endif
 
 extern const char linux_banner[];
 extern const char linux_proc_banner[];

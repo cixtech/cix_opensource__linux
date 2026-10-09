@@ -20,6 +20,10 @@
 #include "tick-internal.h"
 #include "timekeeping_internal.h"
 
+#ifdef CONFIG_PLAT_BOOT_TIME
+#include <linux/soc/cix/hw_boottime.h>
+#endif
+
 static noinline u64 cycles_to_nsec_safe(struct clocksource *cs, u64 start, u64 end)
 {
 	u64 delta = clocksource_delta(end, start, cs->mask);
@@ -1189,8 +1193,11 @@ void __clocksource_update_freq_scale(struct clocksource *cs, u32 scale, u32 freq
 
 	clocksource_update_max_deferment(cs);
 
-	pr_info("%s: freq: %Lu Hz, mask: 0x%llx max_cycles: 0x%llx, max_idle_ns: %lld ns\n",
-		cs->name, (u64)freq * scale, cs->mask, cs->max_cycles, cs->max_idle_ns);
+#ifdef CONFIG_PLAT_BOOT_TIME
+	boot_record("[INFOR] Kernel_init_start");
+#endif
+	pr_info("%s: mask: 0x%llx max_cycles: 0x%llx, max_idle_ns: %lld ns\n",
+		cs->name, cs->mask, cs->max_cycles, cs->max_idle_ns);
 }
 EXPORT_SYMBOL_GPL(__clocksource_update_freq_scale);
 

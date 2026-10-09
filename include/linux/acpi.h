@@ -8,6 +8,7 @@
 #ifndef _LINUX_ACPI_H
 #define _LINUX_ACPI_H
 
+#include <linux/cleanup.h>
 #include <linux/errno.h>
 #include <linux/ioport.h>	/* for struct resource */
 #include <linux/resource_ext.h>
@@ -228,6 +229,17 @@ int acpi_locate_initial_tables (void);
 void acpi_reserve_initial_tables (void);
 void acpi_table_init_complete (void);
 int acpi_table_init (void);
+
+static inline struct acpi_table_header *acpi_get_table_pointer(char *signature, u32 instance)
+{
+	struct acpi_table_header *table;
+	int status = acpi_get_table(signature, instance, &table);
+
+	if (ACPI_FAILURE(status))
+		return ERR_PTR(-ENOENT);
+	return table;
+}
+DEFINE_FREE(acpi_put_table, struct acpi_table_header *, if (!IS_ERR_OR_NULL(_T)) acpi_put_table(_T))
 
 #ifdef CONFIG_ACPI_TABLE_LIB
 #define EXPORT_SYMBOL_ACPI_LIB(x) EXPORT_SYMBOL_NS_GPL(x, ACPI)
@@ -1151,6 +1163,16 @@ static inline bool acpi_dev_state_d0(struct device *dev)
 }
 #endif
 
+#ifdef CONFIG_ACPI
+struct acpi_fw_sleep_ops {
+	int (*enter)(u8);
+	bool (*valid)(u8);
+};
+
+void acpi_set_fw_sleep_ops(const struct acpi_fw_sleep_ops *ops);
+
+#endif
+
 #if defined(CONFIG_ACPI) && defined(CONFIG_PM_SLEEP)
 int acpi_subsys_prepare(struct device *dev);
 void acpi_subsys_complete(struct device *dev);
@@ -1283,6 +1305,8 @@ int acpi_dev_get_property(const struct acpi_device *adev, const char *name,
 int __acpi_node_get_property_reference(const struct fwnode_handle *fwnode,
 				const char *name, size_t index, size_t num_args,
 				struct fwnode_reference_args *args);
+int __acpi_node_count_property_reference(const struct fwnode_handle *fwnode,
+	const char *name);
 
 static inline int acpi_node_get_property_reference(
 				const struct fwnode_handle *fwnode,
@@ -1495,6 +1519,9 @@ int find_acpi_cpu_topology(unsigned int cpu, int level);
 int find_acpi_cpu_topology_cluster(unsigned int cpu);
 int find_acpi_cpu_topology_package(unsigned int cpu);
 int find_acpi_cpu_topology_hetero_id(unsigned int cpu);
+void acpi_pptt_get_cpus_from_container(u32 acpi_cpu_id, cpumask_t *cpus);
+int find_acpi_cache_level_from_id(u32 cache_id);
+int acpi_pptt_get_cpumask_from_cache_id(u32 cache_id, cpumask_t *cpus);
 #else
 static inline int acpi_pptt_cpu_is_thread(unsigned int cpu)
 {
@@ -1515,6 +1542,17 @@ static inline int find_acpi_cpu_topology_package(unsigned int cpu)
 static inline int find_acpi_cpu_topology_hetero_id(unsigned int cpu)
 {
 	return -EINVAL;
+}
+static inline void acpi_pptt_get_cpus_from_container(u32 acpi_cpu_id,
+						     cpumask_t *cpus) { }
+static inline int find_acpi_cache_level_from_id(u32 cache_id)
+{
+	return -ENOENT;
+}
+static inline int acpi_pptt_get_cpumask_from_cache_id(u32 cache_id,
+						      cpumask_t *cpus)
+{
+	return -ENOENT;
 }
 #endif
 
@@ -1543,9 +1581,18 @@ static inline void acpi_init_ffh(void) { }
 #ifdef CONFIG_ACPI
 extern void acpi_device_notify(struct device *dev);
 extern void acpi_device_notify_remove(struct device *dev);
+/*--------------------------------------------------------------------------
+				Device Performance States
+  -------------------------------------------------------------------------- */
+
+int acpi_dev_perf_attach(struct device *dev);
+int acpi_dev_perf_detach(struct device *dev);
+
 #else
 static inline void acpi_device_notify(struct device *dev) { }
 static inline void acpi_device_notify_remove(struct device *dev) { }
+static int acpi_dev_perf_attach(struct device *dev) { return 0; }
+static int acpi_dev_perf_detach(struct device *dev) { return 0; }
 #endif
 
 #endif	/*_LINUX_ACPI_H*/

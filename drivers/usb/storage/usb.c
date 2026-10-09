@@ -1065,8 +1065,12 @@ int usb_stor_probe2(struct us_data *us)
 
 	if (delay_use > 0)
 		dev_dbg(dev, "waiting for device to settle before scanning\n");
+#if IS_ENABLED(CONFIG_ARCH_CIX_EMU_FPGA)
+  	queue_delayed_work(system_freezable_wq, &us->scan_dwork, 0);
+#else
 	queue_delayed_work(system_freezable_wq, &us->scan_dwork,
 			delay_use * HZ);
+#endif
 	return 0;
 
 	/* We come here if there are any problems */

@@ -22,15 +22,6 @@
 	isb
 .endm
 
-.macro __init_el2_hcrx
-	mrs	x0, id_aa64mmfr1_el1
-	ubfx	x0, x0, #ID_AA64MMFR1_EL1_HCX_SHIFT, #4
-	cbz	x0, .Lskip_hcrx_\@
-	mov_q	x0, HCRX_HOST_FLAGS
-	msr_s	SYS_HCRX_EL2, x0
-.Lskip_hcrx_\@:
-.endm
-
 /* Check if running in host at EL2 mode, i.e., (h)VHE. Jump to fail if not. */
 .macro __check_hvhe fail, tmp
 	mrs	\tmp, hcr_el2
@@ -218,7 +209,6 @@
  */
 .macro init_el2_state
 	__init_el2_sctlr
-	__init_el2_hcrx
 	__init_el2_timers
 	__init_el2_debug
 	__init_el2_lor
@@ -269,6 +259,17 @@
 #endif
 
 .macro finalise_el2_state
+	check_override id_aa64pfr0, ID_AA64PFR0_EL1_MPAM_SHIFT, .Linit_mpam_\@, .Lskip_mpam_\@, x1, x2
+
+.Linit_mpam_\@:
+	mov	x0, #MPAM2_EL2_EnMPAMSM_MASK
+	msr_s	SYS_MPAM2_EL2, x0		// use the default partition,
+						// and disable lower traps
+	mrs_s	x0, SYS_MPAMIDR_EL1
+	tbz	x0, #MPAMIDR_EL1_HAS_HCR_SHIFT, .Lskip_mpam_\@  // skip if no MPAMHCR reg
+	msr_s   SYS_MPAMHCR_EL2, xzr		// clear TRAP_MPAMIDR_EL1 -> EL2
+
+.Lskip_mpam_\@:
 	check_override id_aa64pfr0, ID_AA64PFR0_EL1_SVE_SHIFT, .Linit_sve_\@, .Lskip_sve_\@, x1, x2
 
 .Linit_sve_\@:	/* SVE register access */
@@ -338,6 +339,14 @@
 	cbz     x1, .Lskip_sme_\@
 
 	msr_s	SYS_SMPRIMAP_EL2, xzr		// Make all priorities equal
+
+	mrs	x1, id_aa64mmfr1_el1		// HCRX_EL2 present?
+	ubfx	x1, x1, #ID_AA64MMFR1_EL1_HCX_SHIFT, #4
+	cbz	x1, .Lskip_sme_\@
+
+	mrs_s	x1, SYS_HCRX_EL2
+	orr	x1, x1, #HCRX_EL2_SMPME_MASK	// Enable priority mapping
+	msr_s	SYS_HCRX_EL2, x1
 .Lskip_sme_\@:
 .endm
 

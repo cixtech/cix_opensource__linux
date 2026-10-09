@@ -1320,7 +1320,8 @@ int dev_pm_opp_set_rate(struct device *dev, unsigned long target_freq)
 			goto put_opp_table;
 		}
 
-		freq = clk_round_rate(opp_table->clk, target_freq);
+		if (!IS_ERR(opp_table->clk))
+			freq = clk_round_rate(opp_table->clk, target_freq);
 		if ((long)freq <= 0)
 			freq = target_freq;
 

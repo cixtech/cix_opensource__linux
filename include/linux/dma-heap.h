@@ -25,6 +25,7 @@ struct dma_heap_ops {
 				    unsigned long len,
 				    unsigned long fd_flags,
 				    unsigned long heap_flags);
+	long (*get_pool_size)(struct dma_heap *heap);
 };
 
 /**
@@ -49,6 +50,15 @@ struct dma_heap_export_info {
  * The per-heap data for the heap.
  */
 void *dma_heap_get_drvdata(struct dma_heap *heap);
+
+/**
+ * dma_heap_get_name() - get heap name
+ * @heap: DMA-Heap to retrieve private data for
+ *
+ * Returns:
+ * The char* for the heap name.
+ */
+struct device *dma_heap_get_dev(struct dma_heap *heap);
 
 /**
  * dma_heap_get_name() - get heap name

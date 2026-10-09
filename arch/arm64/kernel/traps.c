@@ -49,6 +49,15 @@
 #include <asm/stacktrace.h>
 #include <asm/system_misc.h>
 #include <asm/sysreg.h>
+#ifdef CONFIG_PLAT_AP_HOOK
+#include <linux/soc/cix/rdr_platform.h>
+#endif
+#ifdef CONFIG_PLAT_SKY1_AUDIO_TIMEOUT
+#include <linux/soc/cix/dst_audio_timeout_error.h>
+#endif
+#ifdef CONFIG_PLAT_SKY1_RCSU_GASKET_ERROR
+#include <linux/soc/cix/dst_rcsu_gasket_error.h>
+#endif
 
 static bool __kprobes __check_eq(unsigned long pstate)
 {
@@ -220,6 +229,7 @@ void die(const char *str, struct pt_regs *regs, long err)
 
 	console_verbose();
 	bust_spinlocks(1);
+
 	ret = __die(str, err, regs);
 
 	if (regs && kexec_should_crash(current))
@@ -976,12 +986,22 @@ void __noreturn panic_bad_stack(struct pt_regs *regs, unsigned long esr, unsigne
 
 void __noreturn arm64_serror_panic(struct pt_regs *regs, unsigned long esr)
 {
+	unsigned long far;
 	console_verbose();
+
+	far = read_sysreg(far_el1);
 
 	pr_crit("SError Interrupt on CPU%d, code 0x%016lx -- %s\n",
 		smp_processor_id(), esr, esr_get_class_string(esr));
 	if (regs)
 		__show_regs(regs);
+
+#ifdef CONFIG_PLAT_SKY1_AUDIO_TIMEOUT
+	sky1_check_audio_timeout_error(far, regs);
+#endif
+#ifdef CONFIG_PLAT_SKY1_RCSU_GASKET_ERROR
+	sky1_check_rcsu_gasket_error();
+#endif
 
 	nmi_panic(regs, "Asynchronous SError Interrupt");
 

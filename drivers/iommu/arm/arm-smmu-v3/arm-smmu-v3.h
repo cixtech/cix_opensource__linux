@@ -679,6 +679,7 @@ struct arm_smmu_device {
 
 	/* IOMMU core code handle */
 	struct iommu_device		iommu;
+	bool				bypass;
 
 	struct rb_root			streams;
 	struct mutex			streams_mutex;
@@ -754,6 +755,23 @@ void arm_smmu_tlb_inv_range_asid(unsigned long iova, size_t size, int asid,
 bool arm_smmu_free_asid(struct arm_smmu_ctx_desc *cd);
 int arm_smmu_atc_inv_domain(struct arm_smmu_domain *smmu_domain, int ssid,
 			    unsigned long iova, size_t size);
+#ifdef CONFIG_ARCH_CIX
+enum {
+	SMMU_PROBE_START = 0,
+	SMMU_EN_BEFORE,
+	SMMU_EN_AFTER,
+};
+
+enum {
+	SMMU_DEV_ATTACH = 0,
+	SMMU_DEV_DETACH,
+};
+
+int register_smmu_attach_notifier(struct notifier_block *nb);
+int unregister_smmu_attach_notifier(struct notifier_block *nb);
+int register_smmu_probe_notifier(struct notifier_block *nb);
+int unregister_smmu_probe_notifier(struct notifier_block *nb);
+#endif
 
 #ifdef CONFIG_ARM_SMMU_V3_SVA
 bool arm_smmu_sva_supported(struct arm_smmu_device *smmu);

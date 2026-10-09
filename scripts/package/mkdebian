@@ -223,6 +223,8 @@ Architecture: $debarch
 Description: Linux kernel, version $version
  This package contains the Linux kernel, modules and corresponding other
  files, version: $version.
+Pre-Depends: dkms (>= 2.8.7)
+Depends: linux-headers-$version (= \${binary:Version})
 EOF
 
 if [ "${SRCARCH}" != um ]; then

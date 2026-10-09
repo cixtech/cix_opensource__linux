@@ -12,6 +12,7 @@
 #include <sound/sof/header.h>
 #include <sound/sof/dai-intel.h>
 #include <sound/sof/dai-imx.h>
+#include <sound/sof/dai-cix.h>
 #include <sound/sof/dai-amd.h>
 #include <sound/sof/dai-mediatek.h>
 
@@ -86,6 +87,8 @@ enum sof_ipc_dai_type {
 	SOF_DAI_AMD_DMIC,		/**< AMD ACP DMIC */
 	SOF_DAI_MEDIATEK_AFE,		/**< Mediatek AFE */
 	SOF_DAI_AMD_HS,			/**< Amd HS */
+	SOF_DAI_CIX_I2S_SC,		/**< Cix I2S_SC */
+	SOF_DAI_CIX_I2S_MC,		/**< Cix I2S_MC */
 	SOF_DAI_AMD_SP_VIRTUAL,		/**< AMD ACP SP VIRTUAL */
 	SOF_DAI_AMD_HS_VIRTUAL,		/**< AMD ACP HS VIRTUAL */
 };
@@ -117,6 +120,8 @@ struct sof_ipc_dai_config {
 		struct sof_ipc_dai_acpdmic_params acpdmic;
 		struct sof_ipc_dai_acp_params acphs;
 		struct sof_ipc_dai_mtk_afe_params afe;
+		struct sof_ipc_dai_i2s_sc_params i2s_sc;
+		struct sof_ipc_dai_i2s_mc_params i2s_mc;
 	};
 } __packed;
 

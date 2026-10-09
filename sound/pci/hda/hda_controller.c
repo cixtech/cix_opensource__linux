@@ -628,7 +628,9 @@ static int azx_pcm_open(struct snd_pcm_substream *substream)
 				   buff_step);
 	snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES,
 				   buff_step);
-	snd_hda_power_up(apcm->codec);
+	err = snd_hda_power_up(apcm->codec);
+	if (err < 0)
+		goto unlock;
 	if (hinfo->ops.open)
 		err = hinfo->ops.open(hinfo, apcm->codec, substream);
 	else
@@ -1141,7 +1143,12 @@ static int probe_codec(struct azx *chip, int addr)
 	if (err < 0 || res == -1)
 		return -EIO;
 	dev_dbg(chip->card->dev, "codec #%d probed OK\n", addr);
-	return 0;
+
+	/* config init verbs if required, such as not config by BIOS */
+	if (bus->config_init_verbs)
+		err = bus->config_init_verbs(bus, res);
+
+	return err;
 }
 
 void snd_hda_bus_reset(struct hda_bus *bus)

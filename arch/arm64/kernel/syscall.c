@@ -15,6 +15,9 @@
 #include <asm/syscall.h>
 #include <asm/thread_info.h>
 #include <asm/unistd.h>
+#ifdef CONFIG_PLAT_AP_HOOK
+#include <linux/soc/cix/rdr_platform_ap_hook.h>
+#endif
 
 long compat_arm_syscall(struct pt_regs *regs, int scno);
 long sys_ni_syscall(void);
@@ -145,7 +148,13 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 			goto trace_exit;
 	}
 
+#ifdef CONFIG_PLAT_AP_HOOK
+	syscalls_hook(scno, 0);
+#endif
 	invoke_syscall(regs, scno, sc_nr, syscall_table);
+#ifdef CONFIG_PLAT_AP_HOOK
+	syscalls_hook(scno, 1);
+#endif
 
 	/*
 	 * The tracing status may have changed under our feet, so we have to

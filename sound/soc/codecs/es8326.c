@@ -16,6 +16,7 @@
 #include <sound/soc.h>
 #include <sound/soc-dapm.h>
 #include <sound/tlv.h>
+#include <linux/delay.h>
 #include "es8326.h"
 
 struct es8326_priv {
@@ -43,7 +44,67 @@ struct es8326_priv {
 	int version;
 	int hp;
 	int jack_remove_retry;
+
+	int hp_detect_gpio;
+	int calidone;
 };
+
+static int es8326_dacstream_event(struct snd_soc_dapm_widget *w,
+		  struct snd_kcontrol *kcontrol, int event)
+{
+	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
+	unsigned int regv = 0;
+	printk("enter into %s,\n", __func__);
+	regmap_read(es8326->regmap, ES8326_HP_CAL, &regv);
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		printk("enter into %s, ---> SND_SOC_DAPM_PRE_PMU\n", __func__);
+		break;
+	case SND_SOC_DAPM_POST_PMU:
+		regmap_write(es8326->regmap, ES8326_HP_DRIVER, 0xA0);
+		regmap_write(es8326->regmap, ES8326_ANA_PDN, 0x00);
+		regmap_write(es8326->regmap, ES8326_ANA_LP, 0xf0);
+		regmap_write(es8326->regmap, ES8326_ANA_LP, 0xe8);
+		break;
+	case SND_SOC_DAPM_PRE_PMD:
+		regmap_write(es8326->regmap, ES8326_HP_CAL, 0x00);
+		regmap_write(es8326->regmap, ES8326_HP_DRIVER, 0x8b);
+		break;
+	}
+
+	return 0;
+}
+
+static int headphone_enable_event(struct snd_soc_dapm_widget *w,
+				    struct snd_kcontrol *kcontrol, int event)
+{
+	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
+	unsigned int regv = 0;
+
+	regmap_read(es8326->regmap, ES8326_HP_CAL, &regv);
+	printk("enter into %s, regv = %2x\n", __func__, regv);
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		printk("enter into es8326_headphone ---> SND_SOC_DAPM_PRE_PMU\n");
+
+		break;
+	case SND_SOC_DAPM_POST_PMU:
+		printk("enter into es8326_headphone ---> SND_SOC_DAPM_POST_PMU\n");
+		regmap_write(es8326->regmap, ES8326_RESET, 0x80);
+		break;
+	case SND_SOC_DAPM_PRE_PMD:
+		printk("enter into es8326_headphone ---> SND_SOC_DAPM_PRE_PMD\n");
+		regmap_write(es8326->regmap, ES8326_HP_CAL, 0x00);
+		break;
+	default:
+		dev_dbg(component->dev,
+			"Unhandled dapm widget event %d from %s\n",
+			event, w->name);
+	}
+	return 0;
+}
 
 static const SNDRV_CTL_TLVD_DECLARE_DB_SCALE(dac_vol_tlv, -9550, 50, 0);
 static const SNDRV_CTL_TLVD_DECLARE_DB_SCALE(adc_vol_tlv, -9550, 50, 0);
@@ -115,8 +176,10 @@ static const struct snd_soc_dapm_widget es8326_dapm_widgets[] = {
 
 	/* Digital Interface */
 	SND_SOC_DAPM_AIF_OUT("I2S OUT", "I2S1 Capture", 0, SND_SOC_NOPM, 0, 0),
-	SND_SOC_DAPM_AIF_IN("I2S IN", "I2S1 Playback", 0, SND_SOC_NOPM, 0, 0),
-
+	SND_SOC_DAPM_AIF_IN_E("I2S IN", "I2S1 Playback", 0, SND_SOC_NOPM, 0, 0,
+			es8326_dacstream_event, SND_SOC_DAPM_PRE_PMU |
+			SND_SOC_DAPM_PRE_PMD | SND_SOC_DAPM_POST_PMU),
+	
 	/* ADC Digital Mute */
 	SND_SOC_DAPM_PGA("ADC L1", ES8326_ADC_MUTE, 0, 1, NULL, 0),
 	SND_SOC_DAPM_PGA("ADC R1", ES8326_ADC_MUTE, 1, 1, NULL, 0),
@@ -127,11 +190,21 @@ static const struct snd_soc_dapm_widget es8326_dapm_widgets[] = {
 	SND_SOC_DAPM_DAC("Right DAC", NULL, ES8326_ANA_PDN, 0, 1),
 	SND_SOC_DAPM_DAC("Left DAC", NULL, ES8326_ANA_PDN, 1, 1),
 	SND_SOC_DAPM_SUPPLY("MICBIAS1", ES8326_ANA_MICBIAS, 2, 0, NULL, 0),
-	SND_SOC_DAPM_SUPPLY("MICBIAS2", ES8326_ANA_MICBIAS, 3, 0, NULL, 0),
-
+	SND_SOC_DAPM_SUPPLY("MICBIAS2", ES8326_ANA_MICBIAS, 3, 0, NULL, 0),	
+	
 	SND_SOC_DAPM_PGA("LHPMIX", ES8326_DAC2HPMIX, 7, 0, NULL, 0),
 	SND_SOC_DAPM_PGA("RHPMIX", ES8326_DAC2HPMIX, 3, 0, NULL, 0),
 
+	/* Headphone Charge Pump and Output */
+	SND_SOC_DAPM_OUT_DRV_E("HPOR Enable", ES8326_HP_CAL, 6, 0, NULL, 0,
+			headphone_enable_event,
+			SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
+			SND_SOC_DAPM_PRE_PMD),
+	SND_SOC_DAPM_OUT_DRV_E("HPOL Enable", ES8326_HP_CAL, 2, 0, NULL, 0,
+			headphone_enable_event, 
+			SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMU |
+			SND_SOC_DAPM_PRE_PMD),
+	
 	SND_SOC_DAPM_OUTPUT("HPOL"),
 	SND_SOC_DAPM_OUTPUT("HPOR"),
 };
@@ -152,12 +225,13 @@ static const struct snd_soc_dapm_route es8326_dapm_routes[] = {
 
 	{"Right DAC", NULL, "I2S IN"},
 	{"Left DAC", NULL, "I2S IN"},
-
 	{"LHPMIX", NULL, "Left DAC"},
 	{"RHPMIX", NULL, "Right DAC"},
+	{"HPOL Enable", NULL, "LHPMIX"},
+	{"HPOR Enable", NULL, "RHPMIX"},
 
-	{"HPOL", NULL, "LHPMIX"},
-	{"HPOR", NULL, "RHPMIX"},
+	{"HPOL", NULL, "HPOL Enable"},
+	{"HPOR", NULL, "HPOR Enable"},
 };
 
 static bool es8326_volatile_register(struct device *dev, unsigned int reg)
@@ -230,11 +304,12 @@ static const struct _coeff_div coeff_div[] = {
 	{192, 16000, 3072000, 0x20, 0x02, 0x05, 0x75, 0x0A, 0x1B, 0x1F, 0x3F},
 	{200, 48000, 9600000, 0x04, 0x04, 0x0F, 0x2D, 0x0A, 0x0A, 0x1F, 0x1F},
 	{250, 48000, 12000000, 0x04, 0x04, 0x0F, 0x2D, 0x0A, 0x0A, 0x27, 0x27},
-	{256, 8000, 2048000, 0x60, 0x00, 0x11, 0x35, 0x0A, 0x1B, 0x1F, 0x7F},
-	{256, 16000, 4096000, 0x20, 0x00, 0x01, 0x35, 0x0A, 0x1B, 0x1F, 0x3F},
 
-	{256, 44100, 11289600, 0x00, 0x00, 0x10, 0x2D, 0x0A, 0x0A, 0x1F, 0x1F},
-	{256, 48000, 12288000, 0x00, 0x00, 0x30, 0x2D, 0x0A, 0x0A, 0x1F, 0x1F},
+	{256, 8000, 2048000, 0x01, 0x00, 0x30, 0x2D, 0x26, 0x26, 0x1F, 0x1F},
+	{256, 16000, 4096000, 0x01, 0x00, 0x30, 0x2D, 0x26, 0x26, 0x1F, 0x1F},
+
+	{256, 44100, 11289600, 0x01, 0x00, 0x30, 0x2D, 0x26, 0x26, 0x4F, 0x1F},
+	{256, 48000, 12288000, 0x01, 0x00, 0x30, 0x2D, 0x26, 0x26, 0x4F, 0x1F},
 	{288, 8000, 2304000, 0x20, 0x00, 0x01, 0x35, 0x0A, 0x1B, 0x23, 0x47},
 	{384, 8000, 3072000, 0x60, 0x02, 0x05, 0x75, 0x0A, 0x1B, 0x1F, 0x7F},
 	{384, 16000, 6144000, 0x20, 0x02, 0x03, 0x35, 0x0A, 0x1B, 0x1F, 0x3F},
@@ -295,7 +370,7 @@ static int es8326_set_dai_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
 	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
 	case SND_SOC_DAIFMT_CBC_CFP:
 		snd_soc_component_update_bits(component, ES8326_RESET,
-					      ES8326_MASTER_MODE_EN, ES8326_MASTER_MODE_EN);
+				ES8326_MASTER_MODE_EN, ES8326_MASTER_MODE_EN);
 		break;
 	case SND_SOC_DAIFMT_CBC_CFC:
 		break;
@@ -337,6 +412,8 @@ static int es8326_pcm_hw_params(struct snd_pcm_substream *substream,
 	u8 srate = 0;
 	int coeff;
 
+	printk("Enter into %s\n", __func__);
+	
 	coeff = get_coeff(es8326->sysclk, params_rate(params));
 	/* bit size */
 	switch (params_format(params)) {
@@ -418,12 +495,49 @@ static int es8326_mute(struct snd_soc_dai *dai, int mute, int direction)
 	return 0;
 }
 
-static int es8326_set_bias_level(struct snd_soc_component *codec,
+static int es8326_stream_prepare(struct snd_pcm_substream *substream,
+				   struct snd_soc_dai *dai)
+{
+	struct snd_soc_component *component = dai->component;
+	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
+	unsigned int regv = 0;
+
+	printk("Enter into %s\n", __func__);
+	if(es8326->calidone == 0) {
+		printk("%s, startup headphone calibrate\n", __func__);
+		es8326->calidone = 1;
+		regmap_read(es8326->regmap, ES8326_HP_CAL, &regv);
+		regv |= 0x88;
+		regmap_write(es8326->regmap, ES8326_HP_CAL, regv);
+		regmap_write(es8326->regmap, ES8326_RESET, 0x80);
+		msleep(100);
+	}
+
+	return 0;
+}
+
+static void es8326_stream_shutdown(struct snd_pcm_substream *substream,
+				   struct snd_soc_dai *dai)
+{
+	struct snd_soc_component *component = dai->component;
+	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
+
+	printk("Enter into %s\n", __func__);
+	if(substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+	{
+		printk("Enter into %s----->SNDRV_PCM_STREAM_PLAYBACK\n", __func__);
+		regmap_write(es8326->regmap, ES8326_HP_CAL, 0x00);
+	}
+
+}
+
+static int es8326_set_bias_level(struct snd_soc_component *component,
 				 enum snd_soc_bias_level level)
 {
-	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(codec);
+	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
 	int ret;
 
+	printk("Enter into %s, level = %d\n", __func__, level);
 	switch (level) {
 	case SND_SOC_BIAS_ON:
 		ret = clk_prepare_enable(es8326->mclk);
@@ -441,16 +555,25 @@ static int es8326_set_bias_level(struct snd_soc_component *codec,
 		regmap_write(es8326->regmap, ES8326_ANA_PDN, 0x00);
 		regmap_update_bits(es8326->regmap,  ES8326_CLK_CTL, 0x20, 0x20);
 		regmap_write(es8326->regmap, ES8326_RESET, ES8326_CSM_ON);
+		regmap_write(es8326->regmap, ES8326_CSM_I2C_STA, 0x80);
+		regmap_write(es8326->regmap, ES8326_CSM_I2C_STA, 0x00);
+		msleep(10);
+		regmap_write(es8326->regmap, ES8326_HP_CAL, 0x55);
 		break;
 	case SND_SOC_BIAS_PREPARE:
+		snd_soc_component_update_bits(component, ES8326_CLK_CTL,
+				0x20, 0x20);
 		break;
 	case SND_SOC_BIAS_STANDBY:
+		snd_soc_component_update_bits(component, ES8326_CLK_CTL,
+				0x20, 0x00);
 		break;
 	case SND_SOC_BIAS_OFF:
 		clk_disable_unprepare(es8326->mclk);
 		regmap_write(es8326->regmap, ES8326_ANA_PDN, 0x3b);
 		regmap_write(es8326->regmap, ES8326_VMIDSEL, 0x00);
 		regmap_update_bits(es8326->regmap, ES8326_CLK_CTL, 0x20, 0x00);
+		regmap_write(es8326->regmap, ES8326_INT_SOURCE, 0x0c);
 		regmap_write(es8326->regmap, ES8326_SDINOUT1_IO, ES8326_IO_INPUT);
 		break;
 	}
@@ -462,6 +585,8 @@ static int es8326_set_bias_level(struct snd_soc_component *codec,
 	SNDRV_PCM_FMTBIT_S24_LE)
 
 static const struct snd_soc_dai_ops es8326_ops = {
+	.prepare = es8326_stream_prepare,
+	.shutdown = es8326_stream_shutdown,
 	.hw_params = es8326_pcm_hw_params,
 	.set_fmt = es8326_set_dai_fmt,
 	.set_sysclk = es8326_set_dai_sysclk,
@@ -494,6 +619,7 @@ static void es8326_enable_micbias(struct snd_soc_component *component)
 	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(component);
 
 	snd_soc_dapm_mutex_lock(dapm);
+	printk("Enter into %s\n", __func__);
 	snd_soc_dapm_force_enable_pin_unlocked(dapm, "MICBIAS1");
 	snd_soc_dapm_force_enable_pin_unlocked(dapm, "MICBIAS2");
 	snd_soc_dapm_sync_unlocked(dapm);
@@ -505,6 +631,7 @@ static void es8326_disable_micbias(struct snd_soc_component *component)
 	struct snd_soc_dapm_context *dapm = snd_soc_component_get_dapm(component);
 
 	snd_soc_dapm_mutex_lock(dapm);
+	printk("Enter into %s\n", __func__);
 	snd_soc_dapm_disable_pin_unlocked(dapm, "MICBIAS1");
 	snd_soc_dapm_disable_pin_unlocked(dapm, "MICBIAS2");
 	snd_soc_dapm_sync_unlocked(dapm);
@@ -526,6 +653,7 @@ static void es8326_jack_button_handler(struct work_struct *work)
 	static int button_to_report, press_count;
 	static int prev_button, cur_button;
 
+	printk("Enter into %s\n", __func__);
 	if (!(es8326->jack->status & SND_JACK_HEADSET)) /* Jack unplugged */
 		return;
 
@@ -534,20 +662,24 @@ static void es8326_jack_button_handler(struct work_struct *work)
 	switch (iface) {
 	case 0x93:
 		/* pause button detected */
+		printk("%s, pause button!\n", __func__);
 		cur_button = SND_JACK_BTN_0;
 		break;
 	case 0x6f:
 	case 0x4b:
 		/* button volume up */
+		printk("%s, vol+ button!\n", __func__);
 		cur_button = SND_JACK_BTN_1;
 		break;
 	case 0x27:
 		/* button volume down */
+		printk("%s, vol- button!\n", __func__);
 		cur_button = SND_JACK_BTN_2;
 		break;
 	case 0x1e:
 	case 0xe2:
 		/* button released or not pressed */
+		printk("%s, button release!\n", __func__);
 		cur_button = 0;
 		break;
 	default:
@@ -557,7 +689,8 @@ static void es8326_jack_button_handler(struct work_struct *work)
 	if ((prev_button == cur_button) && (cur_button != 0)) {
 		press_count++;
 		if (press_count > 3) {
-			/* report a press every 120ms */
+			/* report a press every 500ms */
+			printk("%s, report button press event!\n", __func__);
 			snd_soc_jack_report(es8326->jack, cur_button,
 					SND_JACK_BTN_0 | SND_JACK_BTN_1 | SND_JACK_BTN_2);
 			press_count = 0;
@@ -573,6 +706,7 @@ static void es8326_jack_button_handler(struct work_struct *work)
 	} else {
 		/* released or no pressed */
 		if (button_to_report != 0) {
+			printk("%s, report button release event!\n", __func__);
 			snd_soc_jack_report(es8326->jack, button_to_report,
 				    SND_JACK_BTN_0 | SND_JACK_BTN_1 | SND_JACK_BTN_2);
 			snd_soc_jack_report(es8326->jack, 0,
@@ -581,6 +715,7 @@ static void es8326_jack_button_handler(struct work_struct *work)
 		}
 	}
 	mutex_unlock(&es8326->lock);
+	printk("Exit %s\n", __func__);
 }
 
 static void es8326_jack_detect_handler(struct work_struct *work)
@@ -591,6 +726,11 @@ static void es8326_jack_detect_handler(struct work_struct *work)
 	unsigned int iface;
 
 	mutex_lock(&es8326->lock);
+	printk("Enter into %s\n", __func__);
+	if(es8326->hp == 0){
+		printk("Enter into %s,hp=%d\n", __func__, es8326->hp);
+		msleep(110);
+	}
 	iface = snd_soc_component_read(comp, ES8326_HPDET_STA);
 	dev_dbg(comp->dev, "gpio flag %#04x", iface);
 
@@ -693,6 +833,7 @@ static irqreturn_t es8326_irq(int irq, void *dev_id)
 	struct es8326_priv *es8326 = dev_id;
 	struct snd_soc_component *comp = es8326->component;
 
+	printk("Enter into %s\n", __func__);
 	if (!es8326->jack)
 		goto out;
 
@@ -709,7 +850,7 @@ out:
 	return IRQ_HANDLED;
 }
 
-static int es8326_calibrate(struct snd_soc_component *component)
+static __maybe_unused int es8326_calibrate(struct snd_soc_component *component)
 {
 	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
 	unsigned int reg;
@@ -760,81 +901,72 @@ static int es8326_calibrate(struct snd_soc_component *component)
 static int es8326_resume(struct snd_soc_component *component)
 {
 	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
+	unsigned int reg;
 
+	printk("Enter into %s\n", __func__);
 	regcache_cache_only(es8326->regmap, false);
 	regcache_sync(es8326->regmap);
 
-	/* reset internal clock state */
-	regmap_write(es8326->regmap, ES8326_RESET, 0x1f);
-	regmap_write(es8326->regmap, ES8326_VMIDSEL, 0x0E);
-	usleep_range(10000, 15000);
-	regmap_write(es8326->regmap, ES8326_HPJACK_TIMER, 0x88);
-	/* set headphone default type and detect pin */
-	regmap_write(es8326->regmap, ES8326_HPDET_TYPE, 0x81);
-	regmap_write(es8326->regmap, ES8326_CLK_RESAMPLE, 0x05);
-
-	/* set internal oscillator as clock source of headpone cp */
-	regmap_write(es8326->regmap, ES8326_CLK_DIV_CPC, 0x84);
-	regmap_write(es8326->regmap, ES8326_CLK_CTL, ES8326_CLK_ON);
-	/* clock manager reset release */
 	regmap_write(es8326->regmap, ES8326_RESET, 0x17);
-	/* set headphone detection as half scan mode */
-	regmap_write(es8326->regmap, ES8326_HP_MISC, 0x08);
+	regmap_write(es8326->regmap, ES8326_CLK_CTL, ES8326_CLK_ON);
 	regmap_write(es8326->regmap, ES8326_PULLUP_CTL, 0x00);
-
-	/* enable headphone driver */
-	regmap_write(es8326->regmap, ES8326_HP_DRIVER, 0xa7);
-	usleep_range(2000, 5000);
-	regmap_write(es8326->regmap, ES8326_HP_DRIVER_REF, 0xab);
-	usleep_range(2000, 5000);
-	regmap_write(es8326->regmap, ES8326_HP_DRIVER_REF, 0xbb);
-	usleep_range(2000, 5000);
-	regmap_write(es8326->regmap, ES8326_HP_DRIVER, 0xa1);
-
+	/* Two channel ADC */
 	regmap_write(es8326->regmap, ES8326_CLK_INV, 0x00);
-	regmap_write(es8326->regmap, ES8326_CLK_VMIDS1, 0xc4);
+	regmap_write(es8326->regmap, ES8326_CLK_RESAMPLE, 0x05);
+	regmap_write(es8326->regmap, ES8326_CLK_DIV1, 0x01);
+	regmap_write(es8326->regmap, ES8326_CLK_DIV2, 0x00);
+	regmap_write(es8326->regmap, ES8326_CLK_DLL, 0x30);
+	regmap_write(es8326->regmap, ES8326_CLK_MUX, 0x2D);
+	regmap_write(es8326->regmap, ES8326_CLK_ADC_SEL, 0x26);
+	regmap_write(es8326->regmap, ES8326_CLK_DAC_SEL, 0x26);
+	regmap_write(es8326->regmap, ES8326_CLK_ADC_OSR, 0x1F);
+	regmap_write(es8326->regmap, ES8326_CLK_DAC_OSR, 0x1F);
+	regmap_write(es8326->regmap, ES8326_CLK_DIV_CPC, 0x04);
+	regmap_write(es8326->regmap, ES8326_CLK_INV, 0x00);
+	regmap_write(es8326->regmap, ES8326_CLK_DIV_CPC, 0x84);
+	regmap_write(es8326->regmap, ES8326_CLK_VMIDS1, 0xC4);
 	regmap_write(es8326->regmap, ES8326_CLK_VMIDS2, 0x81);
-	regmap_write(es8326->regmap, ES8326_CLK_CAL_TIME, 0x00);
-	/* calibrate for B version */
-	es8326_calibrate(component);
-	/* turn off headphone out */
-	regmap_write(es8326->regmap, ES8326_HP_CAL, 0x00);
-	/* set ADC and DAC in low power mode */
-	regmap_write(es8326->regmap, ES8326_ANA_LP, 0xf0);
-
-	/* force micbias on */
-	regmap_write(es8326->regmap, ES8326_ANA_MICBIAS, 0x4f);
+	regmap_write(es8326->regmap, ES8326_CLK_CAL_TIME, 0x04);
 	regmap_write(es8326->regmap, ES8326_SYS_BIAS, 0x08);
-	regmap_write(es8326->regmap, ES8326_ANA_VSEL, 0x7F);
-	/* select vdda as micbias source */
-	regmap_write(es8326->regmap, ES8326_VMIDLOW, 0x23);
-	/* set dac dsmclip = 1 */
-	regmap_write(es8326->regmap, ES8326_DAC_DSM, 0x08);
-	regmap_write(es8326->regmap, ES8326_DAC_VPPSCALE, 0x15);
-
-	regmap_write(es8326->regmap, ES8326_INT_SOURCE,
-		    (ES8326_INT_SRC_PIN9 | ES8326_INT_SRC_BUTTON));
-	regmap_write(es8326->regmap, ES8326_INTOUT_IO,
-		     es8326->interrupt_clk);
-	regmap_write(es8326->regmap, ES8326_SDINOUT1_IO,
-		    (ES8326_IO_DMIC_CLK << ES8326_SDINOUT1_SHIFT));
-	regmap_write(es8326->regmap, ES8326_SDINOUT23_IO, ES8326_IO_INPUT);
-
-	regmap_write(es8326->regmap, ES8326_ANA_PDN, 0x3b);
+	regmap_write(es8326->regmap, ES8326_PGAGAIN, 0x10);
+	regmap_write(es8326->regmap, ES8326_ANA_VSEL, 0x7F);////
+	regmap_write(es8326->regmap, ES8326_HP_DRIVER, 0xAF);//time
+	regmap_write(es8326->regmap, ES8326_DAC2HPMIX, 0x22);//SNR
+	regmap_write(es8326->regmap, ES8326_HP_DRIVER_REF, 0x83);//THD
+	regmap_write(es8326->regmap, ES8326_SYS_BIAS, 0x08);
+	regmap_write(es8326->regmap, ES8326_DAC2HPMIX, 0x22);
+	regmap_write(es8326->regmap, ES8326_ADC1_SRC, 0x44);
+	regmap_write(es8326->regmap, ES8326_ADC2_SRC, 0x66);
+	regmap_write(es8326->regmap, ES8326_HPJACK_TIMER, 0x88);
+	regmap_write(es8326->regmap, ES8326_HPDET_TYPE, 0x81 | ES8326_HP_DET_SRC_PIN9);
+	regmap_write(es8326->regmap, ES8326_INT_SOURCE, 0x0c);
+	regmap_write(es8326->regmap, ES8326_INTOUT_IO, es8326->interrupt_clk);
 	regmap_write(es8326->regmap, ES8326_RESET, ES8326_CSM_ON);
-	regmap_update_bits(es8326->regmap, ES8326_PGAGAIN, ES8326_MIC_SEL_MASK,
-			   ES8326_MIC1_SEL);
-
-	regmap_update_bits(es8326->regmap, ES8326_DAC_MUTE, ES8326_MUTE_MASK,
-			   ES8326_MUTE);
-
-	regmap_write(es8326->regmap, ES8326_HPDET_TYPE, 0x80 |
-			((es8326->version == ES8326_VERSION_B) ?
-			(ES8326_HP_DET_SRC_PIN9 | es8326->jack_pol) :
-			(ES8326_HP_DET_SRC_PIN9 | es8326->jack_pol | 0x04)));
-
-	es8326->jack_remove_retry = 0;
-	es8326->hp = 0;
+	snd_soc_component_update_bits(component, ES8326_PGAGAIN,
+				      ES8326_MIC_SEL_MASK, ES8326_MIC1_SEL);
+	msleep(15);
+	regmap_write(es8326->regmap, ES8326_DAC2HPMIX, 0xAA);//B00
+	regmap_write(es8326->regmap, ES8326_HP_CAL, 0x00);
+	msleep(50);
+	regmap_write(es8326->regmap, ES8326_ANA_MICBIAS, 0x4C);//
+	regmap_write(es8326->regmap, ES8326_HPJACK_TIMER, 0xF8); //F8
+	regmap_write(es8326->regmap, ES8326_HP_VOL, 0x00);
+	regmap_write(es8326->regmap, ES8326_HP_DRIVER_REF, 0x37);//B7
+	regmap_write(es8326->regmap, ES8326_HP_MISC, 0x0c);//0C
+	regmap_write(es8326->regmap, ES8326_HPDET_TYPE, 0x80 | ES8326_HP_DET_SRC_PIN9);
+	regmap_read(es8326->regmap, ES8326_CHIP_VERSION, &reg);
+	if ((reg & ES8326_VERSION_B) == 1) {
+		regmap_write(es8326->regmap, ES8326_ANA_MICBIAS, 0xEC);
+		regmap_write(es8326->regmap, ES8326_ANA_VSEL, 0x7F);
+		regmap_write(es8326->regmap, ES8326_VMIDLOW, 0x0F);
+		/* enable button detect */
+		regmap_write(es8326->regmap, ES8326_HP_DRIVER, 0xA0);
+		regmap_write(es8326->regmap, ES8326_HP_VOL, 0x80);
+		regmap_write(es8326->regmap, ES8326_HP_DRIVER_REF, 0x97);
+	}
+	msleep(150);
+	regmap_write(es8326->regmap, ES8326_HP_CAL, 0x00);
+	es8326_irq(es8326->irq, es8326);
 	return 0;
 }
 
@@ -842,6 +974,7 @@ static int es8326_suspend(struct snd_soc_component *component)
 {
 	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
 
+	printk("Enter into %s\n", __func__);
 	cancel_delayed_work_sync(&es8326->jack_detect_work);
 	es8326_disable_micbias(component);
 	es8326->calibrated = false;
@@ -861,9 +994,11 @@ static int es8326_probe(struct snd_soc_component *component)
 	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
 	int ret;
 
+	printk("Enter into %s\n", __func__);
 	es8326->component = component;
 	es8326->jd_inverted = device_property_read_bool(component->dev,
 							"everest,jack-detect-inverted");
+	es8326->calidone = 0;
 
 	ret = device_property_read_u8(component->dev, "everest,mic1-src", &es8326->mic1_src);
 	if (ret != 0) {
@@ -886,16 +1021,14 @@ static int es8326_probe(struct snd_soc_component *component)
 	}
 	dev_dbg(component->dev, "jack-pol %x", es8326->jack_pol);
 
-	ret = device_property_read_u8(component->dev, "everest,interrupt-src",
-				      &es8326->interrupt_src);
+	ret = device_property_read_u8(component->dev, "everest,interrupt-src", &es8326->jack_pol);
 	if (ret != 0) {
 		dev_dbg(component->dev, "interrupt-src return %d", ret);
 		es8326->interrupt_src = ES8326_HP_DET_SRC_PIN9;
 	}
 	dev_dbg(component->dev, "interrupt-src %x", es8326->interrupt_src);
 
-	ret = device_property_read_u8(component->dev, "everest,interrupt-clk",
-				      &es8326->interrupt_clk);
+	ret = device_property_read_u8(component->dev, "everest,interrupt-clk", &es8326->jack_pol);
 	if (ret != 0) {
 		dev_dbg(component->dev, "interrupt-clk return %d", ret);
 		es8326->interrupt_clk = 0x45;
@@ -910,7 +1043,7 @@ static void es8326_enable_jack_detect(struct snd_soc_component *component,
 				struct snd_soc_jack *jack)
 {
 	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
-
+	printk("Enter into %s\n", __func__);
 	mutex_lock(&es8326->lock);
 	if (es8326->jd_inverted)
 		snd_soc_component_update_bits(component, ES8326_HPDET_TYPE,
@@ -925,7 +1058,7 @@ static void es8326_disable_jack_detect(struct snd_soc_component *component)
 {
 	struct es8326_priv *es8326 = snd_soc_component_get_drvdata(component);
 
-	dev_dbg(component->dev, "Enter into %s\n", __func__);
+	printk("Enter into %s\n", __func__);
 	if (!es8326->jack)
 		return; /* Already disabled (or never enabled) */
 	cancel_delayed_work_sync(&es8326->jack_detect_work);
@@ -942,6 +1075,7 @@ static void es8326_disable_jack_detect(struct snd_soc_component *component)
 static int es8326_set_jack(struct snd_soc_component *component,
 			struct snd_soc_jack *jack, void *data)
 {
+	printk("Enter into %s\n", __func__);
 	if (jack)
 		es8326_enable_jack_detect(component, jack);
 	else
@@ -1050,7 +1184,9 @@ MODULE_DEVICE_TABLE(acpi, es8326_acpi_match);
 static struct i2c_driver es8326_i2c_driver = {
 	.driver = {
 		.name = "es8326",
+#ifdef CONFIG_ACPI
 		.acpi_match_table = ACPI_PTR(es8326_acpi_match),
+#endif
 		.of_match_table = of_match_ptr(es8326_of_match),
 	},
 	.probe = es8326_i2c_probe,

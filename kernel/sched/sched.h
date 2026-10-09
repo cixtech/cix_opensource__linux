@@ -8,6 +8,7 @@
 #include <linux/sched/affinity.h>
 #include <linux/sched/autogroup.h>
 #include <linux/sched/cpufreq.h>
+#include <linux/sched/cputime.h>
 #include <linux/sched/deadline.h>
 #include <linux/sched.h>
 #include <linux/sched/loadavg.h>
@@ -1588,6 +1589,11 @@ struct rq_flags {
 	unsigned int clock_update_flags;
 #endif
 };
+
+#ifdef CONFIG_SMP
+extern struct rq *__migrate_task(struct rq *rq, struct rq_flags *rf,
+				 struct task_struct *p, int dest_cpu);
+#endif
 
 extern struct balance_callback balance_push_callback;
 

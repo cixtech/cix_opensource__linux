@@ -2,6 +2,8 @@
 // Cadence XSPI flash controller driver
 // Copyright (C) 2020-21 Cadence
 
+#include <linux/clk.h>
+#include <linux/acpi.h>
 #include <linux/completion.h>
 #include <linux/delay.h>
 #include <linux/err.h>
@@ -19,8 +21,13 @@
 #include <linux/bitfield.h>
 #include <linux/limits.h>
 #include <linux/log2.h>
+#include <linux/pinctrl/consumer.h>
+#include <linux/reset.h>
+#include <linux/math.h>
 
-#define CDNS_XSPI_MAGIC_NUM_VALUE	0x6522
+#define CDNS_XSPI_AXI_WIDTH_BYTES 4
+#define CDNS_XSPI_PM_TIMEOUT_MS 100
+#define CDNS_XSPI_MAGIC_NUM_VALUE	0x6523
 #define CDNS_XSPI_MAX_BANKS		8
 #define CDNS_XSPI_NAME			"cadence-xspi"
 
@@ -230,6 +237,9 @@ struct cdns_xspi_dev {
 	const void *out_buffer;
 
 	u8 hw_num_banks;
+	struct clk *maclk;
+	struct clk *pclk;
+	struct clk *funcclk;
 };
 
 static int cdns_xspi_wait_for_controller_idle(struct cdns_xspi_dev *cdns_xspi)
@@ -330,15 +340,24 @@ static void cdns_xspi_sdma_handle(struct cdns_xspi_dev *cdns_xspi)
 {
 	u32 sdma_size, sdma_trd_info;
 	u8 sdma_dir;
+	u32 length_4;
 
 	sdma_size = readl(cdns_xspi->iobase + CDNS_XSPI_SDMA_SIZE_REG);
 	sdma_trd_info = readl(cdns_xspi->iobase + CDNS_XSPI_SDMA_TRD_INFO_REG);
 	sdma_dir = FIELD_GET(CDNS_XSPI_SDMA_DIR, sdma_trd_info);
-
+	length_4 =  DIV_ROUND_DOWN_ULL(sdma_size, CDNS_XSPI_AXI_WIDTH_BYTES);
 	switch (sdma_dir) {
 	case CDNS_XSPI_SDMA_DIR_READ:
-		ioread8_rep(cdns_xspi->sdmabase,
-			    cdns_xspi->in_buffer, sdma_size);
+		if(sdma_size < CDNS_XSPI_AXI_WIDTH_BYTES)
+			ioread8_rep(cdns_xspi->sdmabase,
+			cdns_xspi->in_buffer, sdma_size);
+		else {
+			ioread32_rep(cdns_xspi->sdmabase, cdns_xspi->in_buffer, length_4);
+			cdns_xspi->in_buffer += length_4 * CDNS_XSPI_AXI_WIDTH_BYTES;
+			if(sdma_size % CDNS_XSPI_AXI_WIDTH_BYTES)
+				ioread8_rep(cdns_xspi->sdmabase, cdns_xspi->in_buffer,
+				(sdma_size % CDNS_XSPI_AXI_WIDTH_BYTES));
+		}
 		break;
 
 	case CDNS_XSPI_SDMA_DIR_WRITE:
@@ -432,7 +451,16 @@ static int cdns_xspi_mem_op_execute(struct spi_mem *mem,
 		spi_controller_get_devdata(mem->spi->controller);
 	int ret = 0;
 
+	ret = pm_runtime_resume_and_get(cdns_xspi->dev);
+	if (ret < 0){
+		dev_err(cdns_xspi->dev,"%s,can not get resume\n",__func__);
+	        return ret;
+	}
+
 	ret = cdns_xspi_mem_op(cdns_xspi, mem, op);
+
+	pm_runtime_mark_last_busy(cdns_xspi->dev);
+	pm_runtime_put_autosuspend(cdns_xspi->dev);
 
 	return ret;
 }
@@ -539,7 +567,9 @@ static int cdns_xspi_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct spi_controller *host = NULL;
 	struct cdns_xspi_dev *cdns_xspi = NULL;
+	struct pinctrl *xspi_pinctrl;
 	struct resource *res;
+	struct reset_control *xspi_reset;
 	int ret;
 
 	host = devm_spi_alloc_host(dev, sizeof(*cdns_xspi));
@@ -555,6 +585,13 @@ static int cdns_xspi_probe(struct platform_device *pdev)
 	host->bus_num = -1;
 
 	platform_set_drvdata(pdev, host);
+	xspi_pinctrl = devm_pinctrl_get(&pdev->dev);
+        if (IS_ERR(xspi_pinctrl)) {
+                dev_err(&pdev->dev, "get pinctrl error\n");
+                ret = PTR_ERR(xspi_pinctrl);
+                if (ret != -ENODEV)
+                        return ret;
+        }
 
 	cdns_xspi = spi_controller_get_devdata(host);
 	cdns_xspi->pdev = pdev;
@@ -569,55 +606,183 @@ static int cdns_xspi_probe(struct platform_device *pdev)
 	if (ret)
 		return -ENODEV;
 
-	cdns_xspi->iobase = devm_platform_ioremap_resource_byname(pdev, "io");
+
+	cdns_xspi->pclk = devm_clk_get(&pdev->dev, "pclk");
+	if (IS_ERR(cdns_xspi->pclk)) {
+		dev_err(&pdev->dev, "pclk clock not found.\n");
+	} else {
+		ret = clk_prepare_enable(cdns_xspi->pclk);
+		if (ret) {
+			dev_err(&pdev->dev, "Unable to enable APB clock.\n");
+			return ret;
+		}
+
+	}
+	cdns_xspi->maclk = devm_clk_get(&pdev->dev, "maclk");
+	if (IS_ERR(cdns_xspi->maclk)) {
+		dev_err(&pdev->dev, "maclk clock not found.\n");
+	} else {
+		ret = clk_prepare_enable(cdns_xspi->maclk);
+		if (ret) {
+			dev_err(&pdev->dev, "Unable to enable maclk clock.\n");
+			goto err_pclk;
+		}
+	}
+	cdns_xspi->funcclk = devm_clk_get(&pdev->dev, "funcclk");
+	if (IS_ERR(cdns_xspi->funcclk)) {
+		dev_err(&pdev->dev, "funcclk clock not found.\n");
+	}else {
+		ret = clk_prepare_enable(cdns_xspi->funcclk);
+		if (ret) {
+			dev_err(&pdev->dev, "Unable to enable funcclk clock.\n");
+			goto err_maclk;
+		}
+	}
+	cdns_xspi->iobase = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(cdns_xspi->iobase)) {
 		dev_err(dev, "Failed to remap controller base address\n");
-		return PTR_ERR(cdns_xspi->iobase);
+		ret = PTR_ERR(cdns_xspi->iobase);
+		goto err_funcclk;
 	}
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "sdma");
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
 	cdns_xspi->sdmabase = devm_ioremap_resource(dev, res);
-	if (IS_ERR(cdns_xspi->sdmabase))
-		return PTR_ERR(cdns_xspi->sdmabase);
+	if (IS_ERR(cdns_xspi->sdmabase)){
+		ret = PTR_ERR(cdns_xspi->sdmabase);
+		goto err_funcclk;
+	}
 	cdns_xspi->sdmasize = resource_size(res);
 
-	cdns_xspi->auxbase = devm_platform_ioremap_resource_byname(pdev, "aux");
-	if (IS_ERR(cdns_xspi->auxbase)) {
-		dev_err(dev, "Failed to remap AUX address\n");
-		return PTR_ERR(cdns_xspi->auxbase);
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "aux");
+	if (res == NULL) {
+		dev_dbg(dev, "No AUX address\n");
+	}else {
+		cdns_xspi->auxbase = devm_ioremap_resource(dev, res);
+		if (IS_ERR(cdns_xspi->auxbase)){
+			ret = PTR_ERR(cdns_xspi->auxbase);
+			goto err_funcclk;
+		}
+		cdns_xspi_print_phy_config(cdns_xspi);
 	}
 
 	cdns_xspi->irq = platform_get_irq(pdev, 0);
-	if (cdns_xspi->irq < 0)
-		return -ENXIO;
+	if (cdns_xspi->irq < 0){
+		ret = -ENXIO;
+		goto err_funcclk;
+	}
 
 	ret = devm_request_irq(dev, cdns_xspi->irq, cdns_xspi_irq_handler,
 			       IRQF_SHARED, pdev->name, cdns_xspi);
 	if (ret) {
 		dev_err(dev, "Failed to request IRQ: %d\n", cdns_xspi->irq);
-		return ret;
+		goto err_funcclk;
 	}
 
-	cdns_xspi_print_phy_config(cdns_xspi);
+	xspi_reset = devm_reset_control_array_get_optional_exclusive(&pdev->dev);
+	if (IS_ERR(xspi_reset)) {
+		dev_err(&pdev->dev, "get xspi reset error\n");
+		ret = PTR_ERR(xspi_reset);
+		goto err_funcclk;
+	}
+	/* reset */
+	reset_control_assert(xspi_reset);
+	/* release reset */
+	reset_control_deassert(xspi_reset);
 
 	ret = cdns_xspi_controller_init(cdns_xspi);
 	if (ret) {
 		dev_err(dev, "Failed to initialize controller\n");
-		return ret;
+		goto err_funcclk;
 	}
 
 	host->num_chipselect = 1 << cdns_xspi->hw_num_banks;
 
-	ret = devm_spi_register_controller(dev, host);
+	pm_runtime_set_autosuspend_delay(&pdev->dev, CDNS_XSPI_PM_TIMEOUT_MS);
+	pm_runtime_use_autosuspend(&pdev->dev);
+	pm_runtime_get_noresume(&pdev->dev);
+	pm_runtime_set_active(&pdev->dev);
+	pm_runtime_enable(&pdev->dev);
+	ret = devm_spi_register_master(dev, host);
 	if (ret) {
-		dev_err(dev, "Failed to register SPI host\n");
-		return ret;
+		dev_err(dev, "Failed to register SPI master\n");
+		goto rpm_disable;
 	}
+	pm_runtime_mark_last_busy(&pdev->dev);
+	pm_runtime_put_autosuspend(&pdev->dev);
 
 	dev_info(dev, "Successfully registered SPI host\n");
 
 	return 0;
+
+rpm_disable:
+	pm_runtime_dont_use_autosuspend(&pdev->dev);
+	pm_runtime_put_noidle(&pdev->dev);
+	pm_runtime_set_suspended(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
+
+err_funcclk:
+	clk_disable_unprepare(cdns_xspi->funcclk);
+err_maclk:
+	clk_disable_unprepare(cdns_xspi->maclk);
+err_pclk:
+	clk_disable_unprepare(cdns_xspi->pclk);
+	return ret;
 }
+
+static int cdns_xspi_master_prepare_clks(struct cdns_xspi_dev *cdns_xspi)
+{
+	int ret = 0;
+
+	ret = clk_prepare_enable(cdns_xspi->pclk);
+	if (ret)
+		return ret;
+	ret = clk_prepare_enable(cdns_xspi->funcclk);
+	if (ret) {
+		clk_disable_unprepare(cdns_xspi->pclk);
+		return ret;
+	}
+	ret = clk_prepare_enable(cdns_xspi->maclk);
+        if (ret) {
+		clk_disable_unprepare(cdns_xspi->pclk);
+		clk_disable_unprepare(cdns_xspi->funcclk);
+                return ret;
+        }
+
+	return 0;
+}
+
+static void cdns_xspi_master_unprepare_clks(struct cdns_xspi_dev *master)
+{
+	clk_disable_unprepare(master->pclk);
+	clk_disable_unprepare(master->funcclk);
+	clk_disable_unprepare(master->maclk);
+}
+
+static int __maybe_unused cdns_xspi_runtime_suspend(struct device *dev)
+{
+	struct spi_master *master = dev_get_drvdata(dev);
+	struct cdns_xspi_dev *cdns_xspi = spi_master_get_devdata(master);
+
+	cdns_xspi_master_unprepare_clks(cdns_xspi);
+
+	return 0;
+}
+
+static int __maybe_unused cdns_xspi_runtime_resume(struct device *dev)
+{
+	struct spi_master *master = dev_get_drvdata(dev);
+	struct cdns_xspi_dev *cdns_xspi = spi_master_get_devdata(master);
+
+	pinctrl_pm_select_default_state(dev);
+	cdns_xspi_master_prepare_clks(cdns_xspi);
+
+	return 0;
+}
+
+static const struct dev_pm_ops cdns_xspi_pm_ops = {
+	SET_RUNTIME_PM_OPS(cdns_xspi_runtime_suspend,
+			   cdns_xspi_runtime_resume, NULL)
+};
 
 static const struct of_device_id cdns_xspi_of_match[] = {
 	{
@@ -627,12 +792,22 @@ static const struct of_device_id cdns_xspi_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, cdns_xspi_of_match);
 
+#ifdef CONFIG_ACPI
+static const struct acpi_device_id cdns_xspi_acpi_match[] = {
+        { "CIXH2002", 0 },
+        { },
+};
+MODULE_DEVICE_TABLE(acpi, cdns_xspi_acpi_match);
+#endif
+
 static struct platform_driver cdns_xspi_platform_driver = {
 	.probe          = cdns_xspi_probe,
 	.remove         = NULL,
 	.driver = {
 		.name = CDNS_XSPI_NAME,
 		.of_match_table = cdns_xspi_of_match,
+		.acpi_match_table = ACPI_PTR(cdns_xspi_acpi_match),
+		.pm = &cdns_xspi_pm_ops,
 	},
 };
 

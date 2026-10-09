@@ -116,6 +116,15 @@ int drm_panel_prepare(struct drm_panel *panel)
 	if (!panel)
 		return -EINVAL;
 
+	/* DEBUG-CIX-xenomai3: serial debug to localize UAF / device-class deref.
+	 * Keep this even after the device_link_add fix so future regressions
+	 * are diagnosable from console alone. */
+	dev_info(panel->dev, "DBG-CIX drm_panel_prepare enter panel=%px panel->dev=%px dev->class=%px dev->bus=%px panel->prepared=%d\n",
+		 (void *)panel, (void *)panel->dev,
+		 (void *)(panel->dev ? panel->dev->class : NULL),
+		 (void *)(panel->dev ? panel->dev->bus : NULL),
+		 panel->prepared);
+
 	if (panel->prepared) {
 		dev_warn(panel->dev, "Skipping prepare of already prepared panel\n");
 		return 0;
@@ -335,6 +344,27 @@ struct drm_panel *of_drm_find_panel(const struct device_node *np)
 	return ERR_PTR(-EPROBE_DEFER);
 }
 EXPORT_SYMBOL(of_drm_find_panel);
+
+struct drm_panel *fwnode_drm_find_panel(const struct fwnode_handle *fwnode)
+{
+	struct drm_panel *panel;
+
+	if (!fwnode_device_is_available(fwnode))
+		return ERR_PTR(-ENODEV);
+
+	mutex_lock(&panel_lock);
+
+	list_for_each_entry(panel, &panel_list, list) {
+		if (panel->dev->fwnode == fwnode) {
+			mutex_unlock(&panel_lock);
+			return panel;
+		}
+	}
+
+	mutex_unlock(&panel_lock);
+	return ERR_PTR(-EPROBE_DEFER);
+}
+EXPORT_SYMBOL(fwnode_drm_find_panel);
 
 /**
  * of_drm_get_panel_orientation - look up the orientation of the panel through

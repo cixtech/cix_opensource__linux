@@ -38,7 +38,13 @@
 #include <linux/ptp_classify.h>
 #include <linux/reset.h>
 #include <linux/firmware/xlnx-zynqmp.h>
+#include <linux/acpi.h>
+#include <linux/acpi_mdio.h>
 #include "macb.h"
+#include <linux/regmap.h>
+#include <linux/mfd/syscon.h>
+#include <linux/pinctrl/devinfo.h>
+#include "linux/property.h"
 
 /* This structure is only used for MACB on SiFive FU540 devices */
 struct sifive_fu540_macb_mgmt {
@@ -61,6 +67,13 @@ struct sifive_fu540_macb_mgmt {
 #define MAX_TX_RING_SIZE	4096
 #define TX_RING_BYTES(bp)	(macb_dma_desc_get_size(bp)	\
 				 * (bp)->tx_ring_size)
+
+#define GMAC0_CFG0		0x308
+#define GMAC1_CFG0		0x318
+#define ACLKDIV			BIT(5)
+#define TXCLKDIV		BIT(6)
+#define TXDDRS			BIT(28)
+#define SW_RESET		(0x1f)
 
 /* level of occupied TX descriptors under which we wake up TX process */
 #define MACB_TX_WAKEUP_THRESH(bp)	(3 * (bp)->tx_ring_size / 4)
@@ -514,6 +527,12 @@ static void macb_init_buffers(struct macb *bp)
 	}
 }
 
+static void cix_macb_enable_ddrs(struct regmap *regmap, unsigned int val)
+{
+	/* Enable/Disable RGMII tx data double data rate sampling */
+	regmap_update_bits(regmap, GMAC0_CFG0, TXDDRS, val);
+}
+
 /**
  * macb_set_tx_clk() - Set a clock to a new frequency
  * @bp:		pointer to struct macb
@@ -530,6 +549,11 @@ static void macb_set_tx_clk(struct macb *bp, int speed)
 	if (bp->phy_interface == PHY_INTERFACE_MODE_MII)
 		return;
 
+	if (speed < SPEED_1000)
+		cix_macb_enable_ddrs(bp->regmap, false);
+	else
+		cix_macb_enable_ddrs(bp->regmap, true);
+
 	switch (speed) {
 	case SPEED_10:
 		rate = 2500000;
@@ -545,7 +569,7 @@ static void macb_set_tx_clk(struct macb *bp, int speed)
 	}
 
 	rate_rounded = clk_round_rate(bp->tx_clk, rate);
-	if (rate_rounded < 0)
+	if (rate_rounded < 0 || rate_rounded == clk_get_rate(bp->tx_clk))
 		return;
 
 	/* RGMII allows 50 ppm frequency error. Test and warn if this limit
@@ -732,6 +756,9 @@ static void macb_mac_link_up(struct phylink_config *config,
 	unsigned int q;
 	u32 ctrl;
 
+	if (!(bp->caps & MACB_CAPS_MACB_IS_EMAC))
+		macb_set_tx_clk(bp, speed);
+
 	spin_lock_irqsave(&bp->lock, flags);
 
 	ctrl = macb_or_gem_readl(bp, NCFGR);
@@ -809,24 +836,27 @@ static const struct phylink_mac_ops macb_phylink_ops = {
 	.mac_link_up = macb_mac_link_up,
 };
 
-static bool macb_phy_handle_exists(struct device_node *dn)
+static bool macb_phy_handle_exists(struct fwnode_handle *fwnode)
 {
-	dn = of_parse_phandle(dn, "phy-handle", 0);
-	of_node_put(dn);
-	return dn != NULL;
+	struct fwnode_handle *phy_node;
+
+	phy_node = fwnode_find_reference(fwnode, "phy-handle", 0);
+	fwnode_handle_put(phy_node);
+
+	return !IS_ERR(phy_node);
 }
 
 static int macb_phylink_connect(struct macb *bp)
 {
-	struct device_node *dn = bp->pdev->dev.of_node;
+	struct fwnode_handle *fwnode = bp->pdev->dev.fwnode;
 	struct net_device *dev = bp->dev;
 	struct phy_device *phydev;
 	int ret;
 
-	if (dn)
-		ret = phylink_of_phy_connect(bp->phylink, dn, 0);
+	if (fwnode)
+		ret = phylink_fwnode_phy_connect(bp->phylink, fwnode, 0);
 
-	if (!dn || (ret && !macb_phy_handle_exists(dn))) {
+	if (!fwnode || (ret && !macb_phy_handle_exists(fwnode))) {
 		phydev = phy_find_first(bp->mii_bus);
 		if (!phydev) {
 			netdev_err(dev, "no PHY found\n");
@@ -888,7 +918,6 @@ static int macb_mii_probe(struct net_device *dev)
 		bp->phylink_config.mac_capabilities |= MAC_1000FD;
 		if (!(bp->caps & MACB_CAPS_NO_GIGABIT_HALF))
 			bp->phylink_config.mac_capabilities |= MAC_1000HD;
-
 		__set_bit(PHY_INTERFACE_MODE_GMII,
 			  bp->phylink_config.supported_interfaces);
 		phy_interface_set_rgmii(bp->phylink_config.supported_interfaces);
@@ -915,7 +944,7 @@ static int macb_mii_probe(struct net_device *dev)
 	return 0;
 }
 
-static int macb_mdiobus_register(struct macb *bp)
+static int macb_of_mdiobus_register(struct macb *bp)
 {
 	struct device_node *child, *np = bp->pdev->dev.of_node;
 
@@ -946,6 +975,36 @@ static int macb_mdiobus_register(struct macb *bp)
 		}
 
 	return mdiobus_register(bp->mii_bus);
+}
+
+static int macb_acpi_mdiobus_register(struct macb *bp)
+{
+	struct platform_device *pdev = bp->pdev;
+	struct fwnode_handle *fwnode = pdev->dev.fwnode;
+	struct fwnode_handle *child;
+	u32 addr;
+	int ret;
+
+	if (!IS_ERR_OR_NULL(fwnode_find_reference(fwnode, "fixed-link", 0)))
+		return mdiobus_register(bp->mii_bus);
+	fwnode_for_each_child_node(fwnode, child) {
+		ret = acpi_get_local_address(ACPI_HANDLE_FWNODE(child), &addr);
+		if (ret)
+			continue;
+
+		return acpi_mdiobus_register(bp->mii_bus, fwnode);
+	}
+
+	return mdiobus_register(bp->mii_bus);
+}
+
+static int macb_mdiobus_register(struct macb *bp)
+{
+	/* macb of device tree mode register mdio bus */
+	if (likely(is_of_node(bp->pdev->dev.fwnode)))
+		return macb_of_mdiobus_register(bp);
+	/* macb acpi mode register mdio bus */
+	return macb_acpi_mdiobus_register(bp);
 }
 
 static int macb_mii_init(struct macb *bp)
@@ -3374,14 +3433,21 @@ static unsigned int gem_get_tsu_rate(struct macb *bp)
 	unsigned int tsu_rate;
 
 	tsu_clk = devm_clk_get(&bp->pdev->dev, "tsu_clk");
-	if (!IS_ERR(tsu_clk))
+	if (!IS_ERR(tsu_clk)) {
 		tsu_rate = clk_get_rate(tsu_clk);
+#ifdef CONFIG_ARCH_CIX
+	/* try hclk instead */
+	} else if (!IS_ERR(bp->hclk)) {
+		tsu_clk = bp->hclk;
+		tsu_rate = clk_get_rate(tsu_clk);
+#endif
 	/* try pclk instead */
-	else if (!IS_ERR(bp->pclk)) {
+	} else if (!IS_ERR(bp->pclk)) {
 		tsu_clk = bp->pclk;
 		tsu_rate = clk_get_rate(tsu_clk);
-	} else
+	} else {
 		return -ENOTSUPP;
+	}
 	return tsu_rate;
 }
 
@@ -3750,6 +3816,22 @@ static int gem_set_rxnfc(struct net_device *netdev, struct ethtool_rxnfc *cmd)
 	return ret;
 }
 
+static void macb_get_pauseparam(struct net_device *dev,
+				struct ethtool_pauseparam *pause)
+{
+	struct macb *bp = netdev_priv(dev);
+
+	phylink_ethtool_get_pauseparam(bp->phylink, pause);
+}
+
+static int macb_set_pauseparam(struct net_device *dev,
+			       struct ethtool_pauseparam *pause)
+{
+	struct macb *bp = netdev_priv(dev);
+
+	return phylink_ethtool_set_pauseparam(bp->phylink, pause);
+}
+
 static const struct ethtool_ops macb_ethtool_ops = {
 	.get_regs_len		= macb_get_regs_len,
 	.get_regs		= macb_get_regs,
@@ -3777,8 +3859,10 @@ static const struct ethtool_ops gem_ethtool_ops = {
 	.set_link_ksettings     = macb_set_link_ksettings,
 	.get_ringparam		= macb_get_ringparam,
 	.set_ringparam		= macb_set_ringparam,
-	.get_rxnfc			= gem_get_rxnfc,
-	.set_rxnfc			= gem_set_rxnfc,
+	.get_rxnfc		= gem_get_rxnfc,
+	.set_rxnfc		= gem_set_rxnfc,
+	.get_pauseparam		= macb_get_pauseparam,
+	.set_pauseparam		= macb_set_pauseparam,
 };
 
 static int macb_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
@@ -4916,6 +5000,58 @@ static const struct macb_config versal_config = {
 	.usrio = &macb_default_usrio,
 };
 
+static int cix_sky1_clk_init(struct platform_device *pdev, struct clk **pclk,
+			     struct clk **hclk, struct clk **tx_clk,
+			     struct clk **rx_clk, struct clk **tsu_clk)
+{
+#define GMAC_CLK_NUM (3)
+	int err, i;
+	struct clk *clks[GMAC_CLK_NUM];
+	const char *gmac_clk_names[GMAC_CLK_NUM] = {
+		"aclk", "pclk", "tx_clk"
+	};
+
+	for (i = 0; i < GMAC_CLK_NUM; i++) {
+		clks[i] = devm_clk_get(&pdev->dev, gmac_clk_names[i]);
+		if (IS_ERR_OR_NULL(clks[i])) {
+			err = PTR_ERR_OR_ZERO(clks[i]);
+			if (!err)
+				err = -ENODEV;
+			dev_err(&pdev->dev, "failed to get %s\n", gmac_clk_names[i]);
+			goto err_disable_clk;
+		}
+		err = clk_prepare_enable(clks[i]);
+		if (err) {
+			dev_err(&pdev->dev, "failed to enable %s\n", gmac_clk_names[i]);
+			goto err_disable_clk;
+		}
+	}
+
+	*hclk = clks[0];
+	*pclk = clks[1];
+	*tx_clk = clks[2];
+	*rx_clk = NULL;
+	*tsu_clk = NULL;
+	return 0;
+
+err_disable_clk:
+	while (--i >= 0)
+		clk_disable_unprepare(clks[i]);
+
+	return -EBUSY;
+}
+
+static const struct macb_config cix_config = {
+	.caps = MACB_CAPS_GIGABIT_MODE_AVAILABLE |
+		MACB_CAPS_JUMBO |
+		MACB_CAPS_GEM_HAS_PTP,
+	.dma_burst_length = 16,
+	.jumbo_max_len = 10240,
+	.clk_init = cix_sky1_clk_init,
+	.init = macb_init,
+	.usrio = &macb_default_usrio,
+};
+
 static const struct of_device_id macb_dt_ids[] = {
 	{ .compatible = "cdns,at91sam9260-macb", .data = &at91sam9260_config },
 	{ .compatible = "cdns,macb" },
@@ -4939,10 +5075,23 @@ static const struct of_device_id macb_dt_ids[] = {
 	{ .compatible = "xlnx,zynqmp-gem", .data = &zynqmp_config},
 	{ .compatible = "xlnx,zynq-gem", .data = &zynq_config },
 	{ .compatible = "xlnx,versal-gem", .data = &versal_config},
+	{ .compatible = "cdns,sky1-gem", .data = &cix_config },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, macb_dt_ids);
 #endif /* CONFIG_OF */
+
+static void cix_macb_clkdiv_release(struct regmap *regmap)
+{
+	/* CLKDIV Release for gmac0 */
+	regmap_update_bits(regmap, GMAC0_CFG0, ACLKDIV, 0);
+	regmap_update_bits(regmap, GMAC0_CFG0, TXCLKDIV, 0);
+}
+
+static void cix_macb_sw_reset_release(struct regmap *regmap)
+{
+	regmap_update_bits(regmap, GMAC0_CFG0, SW_RESET, 0);
+}
 
 static const struct macb_config default_gem_config = {
 	.caps = MACB_CAPS_GIGABIT_MODE_AVAILABLE |
@@ -4962,9 +5111,9 @@ static int macb_probe(struct platform_device *pdev)
 			struct clk **, struct clk **,  struct clk **,
 			struct clk **) = macb_config->clk_init;
 	int (*init)(struct platform_device *) = macb_config->init;
-	struct device_node *np = pdev->dev.of_node;
 	struct clk *pclk, *hclk = NULL, *tx_clk = NULL, *rx_clk = NULL;
 	struct clk *tsu_clk = NULL;
+	struct reset_control *rstn;
 	unsigned int queue_mask, num_queues;
 	bool native_io;
 	phy_interface_t interface;
@@ -4974,20 +5123,18 @@ static int macb_probe(struct platform_device *pdev)
 	void __iomem *mem;
 	struct macb *bp;
 	int err, val;
+	struct regmap *regmap;
+	const void *match_data;
 
 	mem = devm_platform_get_and_ioremap_resource(pdev, 0, &regs);
 	if (IS_ERR(mem))
 		return PTR_ERR(mem);
 
-	if (np) {
-		const struct of_device_id *match;
-
-		match = of_match_node(macb_dt_ids, np);
-		if (match && match->data) {
-			macb_config = match->data;
-			clk_init = macb_config->clk_init;
-			init = macb_config->init;
-		}
+	match_data = device_get_match_data(&pdev->dev);
+	if (match_data) {
+		macb_config = (struct macb_config *)match_data;
+		clk_init = macb_config->clk_init;
+		init = macb_config->init;
 	}
 
 	err = clk_init(pdev, &pclk, &hclk, &tx_clk, &rx_clk, &tsu_clk);
@@ -4999,8 +5146,29 @@ static int macb_probe(struct platform_device *pdev)
 	pm_runtime_get_noresume(&pdev->dev);
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
-	native_io = hw_is_native_io(mem);
 
+	regmap = device_syscon_regmap_lookup_by_property(&pdev->dev,
+							 "cix,gmac-ctrl");
+	if (IS_ERR(regmap)) {
+		dev_err(&pdev->dev, "failed to find syscon\n");
+		return PTR_ERR(regmap);
+	}
+	if (regmap) {
+		cix_macb_clkdiv_release(regmap);
+		cix_macb_sw_reset_release(regmap);
+	}
+
+	rstn = devm_reset_control_get(&pdev->dev, "gmac_rstn");
+	if (IS_ERR(rstn)) {
+		dev_err(&pdev->dev, "Failed to get reset\n");
+		err = PTR_ERR(rstn);
+		goto err_disable_clocks;
+	}
+	reset_control_assert(rstn);
+	udelay(2);
+	reset_control_deassert(rstn);
+
+	native_io = hw_is_native_io(mem);
 	macb_probe_queues(mem, native_io, &queue_mask, &num_queues);
 	dev = alloc_etherdev_mq(sizeof(*bp), num_queues);
 	if (!dev) {
@@ -5033,6 +5201,8 @@ static int macb_probe(struct platform_device *pdev)
 	bp->tx_clk = tx_clk;
 	bp->rx_clk = rx_clk;
 	bp->tsu_clk = tsu_clk;
+	bp->rstn = rstn;
+	bp->regmap = regmap;
 	if (macb_config)
 		bp->jumbo_max_len = macb_config->jumbo_max_len;
 
@@ -5044,7 +5214,7 @@ static int macb_probe(struct platform_device *pdev)
 		bp->max_tx_length = GEM_MAX_TX_LEN;
 
 	bp->wol = 0;
-	if (of_property_read_bool(np, "magic-packet"))
+	if (device_property_present(&pdev->dev, "magic-packet"))
 		bp->wol |= MACB_WOL_HAS_MAGIC_PACKET;
 	device_set_wakeup_capable(&pdev->dev, bp->wol & MACB_WOL_HAS_MAGIC_PACKET);
 
@@ -5112,14 +5282,12 @@ static int macb_probe(struct platform_device *pdev)
 	if (bp->caps & MACB_CAPS_NEEDS_RSTONUBR)
 		bp->rx_intr_mask |= MACB_BIT(RXUBR);
 
-	err = of_get_ethdev_address(np, bp->dev);
-	if (err == -EPROBE_DEFER)
-		goto err_out_free_netdev;
-	else if (err)
+	if (device_get_ethdev_address(&pdev->dev, dev)) {
 		macb_get_hwaddr(bp);
+	}
 
-	err = of_get_phy_mode(np, &interface);
-	if (err)
+	interface = device_get_phy_mode(&pdev->dev);
+	if (interface < 0)
 		/* not found in DT, MII by default */
 		bp->phy_interface = PHY_INTERFACE_MODE_MII;
 	else
@@ -5209,6 +5377,7 @@ static int __maybe_unused macb_suspend(struct device *dev)
 	unsigned long flags;
 	unsigned int q;
 	int err;
+	struct dev_pin_info *pins = dev->pins;
 
 	if (!device_may_wakeup(&bp->dev->dev))
 		phy_exit(bp->sgmii_phy);
@@ -5273,10 +5442,14 @@ static int __maybe_unused macb_suspend(struct device *dev)
 	if (!(bp->wol & MACB_WOL_ENABLED)) {
 		rtnl_lock();
 		phylink_stop(bp->phylink);
+		phylink_disconnect_phy(bp->phylink);
 		rtnl_unlock();
 		spin_lock_irqsave(&bp->lock, flags);
 		macb_reset_hw(bp);
 		spin_unlock_irqrestore(&bp->lock, flags);
+		err = pinctrl_select_state(pins->p, pins->sleep_state);
+		if (err)
+			dev_err(dev, "failed to activate sleep pinctrl state\n");
 	}
 
 	if (!(bp->caps & MACB_CAPS_USRIO_DISABLED))
@@ -5301,6 +5474,7 @@ static int __maybe_unused macb_resume(struct device *dev)
 	unsigned long flags;
 	unsigned int q;
 	int err;
+	struct dev_pin_info *pins = dev->pins;
 
 	if (!device_may_wakeup(&bp->dev->dev))
 		phy_init(bp->sgmii_phy);
@@ -5354,6 +5528,17 @@ static int __maybe_unused macb_resume(struct device *dev)
 		napi_enable(&queue->napi_tx);
 	}
 
+	err = pinctrl_select_state(pins->p, pins->default_state);
+	if (err)
+		dev_err(dev, "failed to activate default pinctrl state\n");
+
+	cix_macb_clkdiv_release(bp->regmap);
+	cix_macb_sw_reset_release(bp->regmap);
+
+	reset_control_assert(bp->rstn);
+	udelay(2);
+	reset_control_deassert(bp->rstn);
+
 	if (netdev->hw_features & NETIF_F_NTUPLE)
 		gem_writel_n(bp, ETHT, SCRT2_ETHT, bp->pm_data.scrt2);
 
@@ -5365,8 +5550,7 @@ static int __maybe_unused macb_resume(struct device *dev)
 	macb_set_rx_mode(netdev);
 	macb_restore_features(bp);
 	rtnl_lock();
-
-	phylink_start(bp->phylink);
+	macb_phylink_connect(bp);
 	rtnl_unlock();
 
 	netif_device_attach(netdev);
@@ -5412,12 +5596,19 @@ static const struct dev_pm_ops macb_pm_ops = {
 	SET_RUNTIME_PM_OPS(macb_runtime_suspend, macb_runtime_resume, NULL)
 };
 
+static const struct acpi_device_id macb_acpi_ids[] = {
+	{"CIXH7020", (kernel_ulong_t)&cix_config },
+	{ },
+};
+MODULE_DEVICE_TABLE(acpi, macb_acpi_ids);
+
 static struct platform_driver macb_driver = {
 	.probe		= macb_probe,
 	.remove		= macb_remove,
 	.driver		= {
 		.name		= "macb",
 		.of_match_table	= of_match_ptr(macb_dt_ids),
+		.acpi_match_table = ACPI_PTR(macb_acpi_ids),
 		.pm	= &macb_pm_ops,
 	},
 };

@@ -297,6 +297,7 @@ config CROS_TYPEC_SWITCH
 	  called cros_typec_switch.
 
 source "drivers/platform/chrome/wilco_ec/Kconfig"
+source "drivers/platform/chrome/cix_ec/Kconfig"
 
 # Kunit test cases
 config CROS_KUNIT

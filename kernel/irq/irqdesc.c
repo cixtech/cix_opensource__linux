@@ -19,6 +19,11 @@
 
 #include "internals.h"
 
+#ifdef CONFIG_PLAT_AP_HOOK
+#include <linux/soc/cix/rdr_platform_ap_hook.h>
+#include <linux/soc/cix/rdr_platform.h>
+#endif
+
 /*
  * lockdep: we want to handle all irq_desc locks as a single lock-class:
  */
@@ -682,9 +687,28 @@ int handle_irq_desc(struct irq_desc *desc)
 		return -EINVAL;
 
 	data = irq_desc_get_irq_data(desc);
+
+	/*
+	 * Skip enforce_irqctx check for Dovetail deferred interrupts.
+	 *
+	 * When IRQ pipelining is enabled, interrupts may be deferred and
+	 * replayed later via sync_current_irq_stage(). The is_hardirq()
+	 * function is designed to return false for deferred interrupts.
+	 *
+	 * This would normally fail the enforce_irqctx check for GIC
+	 * interrupts which set IRQD_HANDLE_ENFORCE_IRQCTX to protect
+	 * ACK/EOI ordering. However, for deferred interrupts this check
+	 * is not needed because ACK/EOI has already been completed at
+	 * the pipeline entry point before the IRQ was logged for deferred
+	 * processing.
+	 */
+	if (irqs_pipelined() && (desc->istate & IRQS_DEFERRED))
+		goto do_handle;
+
 	if (WARN_ON_ONCE(!is_hardirq(desc) && handle_enforce_irqctx(data)))
 		return -EPERM;
 
+do_handle:
 	generic_handle_irq_desc(desc);
 	return 0;
 }
@@ -727,6 +751,7 @@ int generic_handle_irq_safe(unsigned int irq)
 	local_irq_save(flags);
 	ret = handle_irq_desc(irq_to_desc(irq));
 	local_irq_restore(flags);
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(generic_handle_irq_safe);
@@ -746,9 +771,19 @@ EXPORT_SYMBOL_GPL(generic_handle_irq_safe);
 int generic_handle_domain_irq(struct irq_domain *domain, unsigned int hwirq)
 {
 	struct irq_desc *desc = irq_resolve_mapping(domain, hwirq);
+	int ret;
 
-	return irqs_pipelined() ? generic_pipeline_irq_desc(desc)
-		: handle_irq_desc(desc);
+#ifdef CONFIG_PLAT_AP_HOOK
+	irq_trace_hook(0, 0, hwirq);
+#endif
+	ret = irqs_pipelined() ? generic_pipeline_irq_desc(desc)
+               : handle_irq_desc(desc);
+
+#ifdef CONFIG_PLAT_AP_HOOK
+	irq_trace_hook(1, 0, hwirq);
+#endif
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(generic_handle_domain_irq);
 

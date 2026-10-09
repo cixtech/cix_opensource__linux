@@ -296,7 +296,8 @@ static const struct sof_dai_types sof_dais[] = {
 	{"AFE", SOF_DAI_MEDIATEK_AFE},
 	{"ACPSP_VIRTUAL", SOF_DAI_AMD_SP_VIRTUAL},
 	{"ACPHS_VIRTUAL", SOF_DAI_AMD_HS_VIRTUAL},
-
+	{"I2SSC", SOF_DAI_CIX_I2S_SC},
+	{"I2SMC", SOF_DAI_CIX_I2S_MC},
 };
 
 static enum sof_ipc_dai_type find_dai(const char *name)
@@ -1961,6 +1962,14 @@ static int sof_link_load(struct snd_soc_component *scomp, int index, struct snd_
 	case SOF_DAI_AMD_HS_VIRTUAL:
 		token_id = SOF_ACPI2S_TOKENS;
 		num_tuples += token_list[SOF_ACPI2S_TOKENS].count;
+		break;
+	case SOF_DAI_CIX_I2S_SC:
+		token_id = SOF_I2S_SC_TOKENS;
+		num_tuples += token_list[SOF_I2S_SC_TOKENS].count;
+		break;
+	case SOF_DAI_CIX_I2S_MC:
+		token_id = SOF_I2S_MC_TOKENS;
+		num_tuples += token_list[SOF_I2S_MC_TOKENS].count;
 		break;
 	default:
 		break;

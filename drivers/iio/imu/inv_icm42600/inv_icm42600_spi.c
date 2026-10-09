@@ -10,6 +10,7 @@
 #include <linux/spi/spi.h>
 #include <linux/regmap.h>
 #include <linux/property.h>
+#include <linux/pinctrl/consumer.h>
 
 #include "inv_icm42600.h"
 
@@ -18,26 +19,20 @@ static int inv_icm42600_spi_bus_setup(struct inv_icm42600_state *st)
 	unsigned int mask, val;
 	int ret;
 
-	/* setup interface registers */
-	val = INV_ICM42600_INTF_CONFIG6_I3C_EN |
-	      INV_ICM42600_INTF_CONFIG6_I3C_SDR_EN |
-	      INV_ICM42600_INTF_CONFIG6_I3C_DDR_EN;
-	ret = regmap_update_bits(st->map, INV_ICM42600_REG_INTF_CONFIG6,
-				 INV_ICM42600_INTF_CONFIG6_MASK, val);
-	if (ret)
-		return ret;
-
-	ret = regmap_update_bits(st->map, INV_ICM42600_REG_INTF_CONFIG4,
-				 INV_ICM42600_INTF_CONFIG4_I3C_BUS_ONLY, 0);
+	/* Configure SPI */
+	ret = regmap_write(st->map, INV_ICM42600_REG_DEVICE_CONFIG, INV_ICM42600_SPI_AP_4WIRE);
 	if (ret)
 		return ret;
 
 	/* set slew rates for I2C and SPI */
-	mask = INV_ICM42600_DRIVE_CONFIG_I2C_MASK |
-	       INV_ICM42600_DRIVE_CONFIG_SPI_MASK;
-	val = INV_ICM42600_DRIVE_CONFIG_I2C(INV_ICM42600_SLEW_RATE_20_60NS) |
-	      INV_ICM42600_DRIVE_CONFIG_SPI(INV_ICM42600_SLEW_RATE_INF_2NS);
-	ret = regmap_update_bits(st->map, INV_ICM42600_REG_DRIVE_CONFIG,
+	mask = INV_ICM42600_DRIVE_CONFIG_I2C_MASK;
+	val = INV_ICM42600_DRIVE_CONFIG_I2C(INV_ICM42600_SLEW_RATE_20_60NS);
+	ret = regmap_update_bits(st->map, INV_ICM42600_REG_DRIVE_CONFIG2,
+				 mask, val);
+
+	mask = INV_ICM42600_DRIVE_CONFIG_SPI_MASK;
+	val = INV_ICM42600_DRIVE_CONFIG_SPI(INV_ICM42600_SLEW_RATE_12_36NS);
+	ret = regmap_update_bits(st->map, INV_ICM42600_REG_DRIVE_CONFIG3,
 				 mask, val);
 	if (ret)
 		return ret;
@@ -64,6 +59,8 @@ static int inv_icm42600_probe(struct spi_device *spi)
 	if (IS_ERR(regmap))
 		return PTR_ERR(regmap);
 
+	pinctrl_pm_select_default_state(&spi->dev);
+
 	return inv_icm42600_core_probe(regmap, chip, spi->irq,
 				       inv_icm42600_spi_bus_setup);
 }
@@ -79,15 +76,32 @@ static const struct of_device_id inv_icm42600_of_matches[] = {
 		.compatible = "invensense,icm42605",
 		.data = (void *)INV_CHIP_ICM42605,
 	}, {
+		.compatible = "invensense,icm42607",
+		.data = (void *)INV_CHIP_ICM42607,
+	}, {
 		.compatible = "invensense,icm42622",
 		.data = (void *)INV_CHIP_ICM42622,
 	}, {
 		.compatible = "invensense,icm42631",
 		.data = (void *)INV_CHIP_ICM42631,
+	}, {
+		.compatible = "invensense,icm42670",
+		.data = (void *)INV_CHIP_ICM42670,
 	},
 	{}
 };
 MODULE_DEVICE_TABLE(of, inv_icm42600_of_matches);
+
+static const struct spi_device_id inv_icm42600_spi_id_table[] = {
+	{ INV_CHIP_ICM42600_DEV_NAME, INV_CHIP_ICM42600 },
+	{ INV_CHIP_ICM42602_DEV_NAME, INV_CHIP_ICM42602 },
+	{ INV_CHIP_ICM42605_DEV_NAME, INV_CHIP_ICM42605 },
+	{ INV_CHIP_ICM42607_DEV_NAME, INV_CHIP_ICM42607 },
+	{ INV_CHIP_ICM42622_DEV_NAME, INV_CHIP_ICM42622 },
+	{ INV_CHIP_ICM42670_DEV_NAME, INV_CHIP_ICM42670 },
+	{},
+};
+MODULE_DEVICE_TABLE(spi, inv_icm42600_spi_id_table);
 
 static struct spi_driver inv_icm42600_driver = {
 	.driver = {
@@ -96,6 +110,7 @@ static struct spi_driver inv_icm42600_driver = {
 		.pm = pm_ptr(&inv_icm42600_pm_ops),
 	},
 	.probe = inv_icm42600_probe,
+	.id_table = inv_icm42600_spi_id_table,
 };
 module_spi_driver(inv_icm42600_driver);
 

@@ -1,3 +1,85 @@
+# Xenomai 3 (Cobalt) Kernel for ARM64
+
+This kernel tree has Xenomai 3 (Cobalt) real-time extension with Dovetail
+interrupt pipeline integrated.
+
+## Quick Start
+
+### Prerequisites
+
+- ARM64 cross compiler (aarch64-none-linux-gnu-)
+- Standard Linux kernel build dependencies
+- autoconf, automake and libtool (userspace libraries only)
+
+### Build Kernel
+
+```bash
+# Using the build script
+./build-kernel.sh
+
+# Or manually
+export CROSS_COMPILE=aarch64-none-linux-gnu-
+export ARCH=arm64
+rm -f .config .config.old
+make LOCALVERSION= defconfig cix.config
+./scripts/config --enable CONFIG_XENOMAI
+./scripts/config --enable CONFIG_DOVETAIL
+make LOCALVERSION= olddefconfig
+make LOCALVERSION= -j$(nproc) Image modules dtbs
+make LOCALVERSION= bindeb-pkg  # For DEB packages
+```
+
+`LOCALVERSION=` is passed empty so that `scripts/setlocalversion` does not
+append a `+` to the release string; the suffix itself comes from
+`CONFIG_LOCALVERSION` in `cix.config`.
+
+The script will generate DEB packages under `../xenomai3-out/debs/` (relative to kernel source):
+- `linux-image-*.deb` - Kernel image
+- `linux-headers-*.deb` - Kernel headers
+- `linux-libc-dev_*.deb` - Kernel libc development files
+
+### Build Userspace Libraries (libcobalt)
+
+```bash
+# Using the build script (automatically clones Xenomai 3)
+./build-userspace.sh
+
+# The Xenomai 3 source will be cloned to ../xenomai3-src/ (relative to kernel dir)
+# DEB package will be generated at ../xenomai3-out/debs/cix-libcobalt-xenomai3_*.deb
+```
+
+### Configuration
+
+`cix.config` sets the kernel version suffix:
+
+- `CONFIG_LOCALVERSION="-cix-build-xenomai3"` - Kernel version suffix
+
+Cobalt is enabled by the `XENOMAI` Kconfig default in `init/Kconfig`, which
+also selects `DOVETAIL`, so `make defconfig cix.config` already yields
+`CONFIG_XENOMAI=y` and `CONFIG_DOVETAIL=y`. The `scripts/config --enable`
+calls above re-assert both, as `build-kernel.sh` does, so that a changed
+default cannot silently drop them.
+
+### Install
+
+```bash
+# Install kernel packages on target
+dpkg -i linux-image-*.deb linux-headers-*.deb linux-libc-dev_*.deb
+
+# Install Xenomai userspace libraries
+dpkg -i cix-libcobalt-xenomai3_*.deb
+```
+
+The Xenomai userspace will be installed under `/usr/xenomai/`:
+- Libraries: `/usr/xenomai/lib/`
+- Headers: `/usr/xenomai/include/`
+- Tools: `/usr/xenomai/bin/`
+
+---
+
+*Standard Linux kernel README follows below*
+---
+
 Linux kernel
 ============
 

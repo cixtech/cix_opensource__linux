@@ -1,0 +1,4 @@
+/dts-v1/;
+
+#include "sky1-evb.dts"
+#include "sky1-evb-isp.dtsi"

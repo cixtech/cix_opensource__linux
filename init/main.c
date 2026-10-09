@@ -112,6 +112,9 @@
 #include <trace/events/initcall.h>
 
 #include <kunit/test.h>
+#ifdef CONFIG_PLAT_BOOT_TIME
+#include <linux/soc/cix/hw_boottime.h>
+#endif
 
 static int kernel_init(void *);
 
@@ -1239,7 +1242,11 @@ int __init_or_module do_one_initcall(initcall_t fn)
 		return -EPERM;
 
 	do_trace_initcall_start(fn);
+#ifdef CONFIG_PLAT_BOOT_TIME
+	ret = do_boottime_initcall(fn);
+#else
 	ret = fn();
+#endif
 	do_trace_initcall_finish(fn, ret);
 
 	msgbuf[0] = 0;
@@ -1468,6 +1475,10 @@ static int __ref kernel_init(void *unused)
 	rcu_end_inkernel_boot();
 
 	do_sysctl_args();
+
+#ifdef CONFIG_PLAT_BOOT_TIME
+	boot_record("[INFOR] Kernel_init_done");
+#endif
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
